@@ -1,0 +1,498 @@
+# -*- coding: utf-8 -*-
+"""
+Ciudadela / Starlit Stag  ->  lampara imprimible en 3 piezas.
+
+  1_piedra  (opaco)       el marco de la estrella.
+  2_luz     (translucido) UNA sola pieza: la corona iluminada que rodea la boca
+                          + el escalon interno (las paredes del pozo) + el ciervo
+                          en relieve + una falda exterior oculta que la hace
+                          imprimible y aloja el LED.
+  3_tapa    (opaco)       cierra por detras y lleva montado el FONDO del nicho,
+                          la pared de detras del ciervo, que no emite luz.
+
+Se encienden la corona, el escalon interno y el ciervo. No se encienden ni el
+marco ni el fondo del nicho.
+
+Todo se construye por booleanas contra la malla original: ninguna superficie
+vista se reconstruye a mano.
+
+Orientacion de impresion: tal cual se exporta, cara plana en la cama y todas las
+cavidades abriendo hacia arriba -> sin soportes.
+"""
+import os
+import numpy as np
+import trimesh
+from shapely.geometry import Polygon, LineString, Point, box as sbox
+from shapely.ops import unary_union, polygonize
+
+# ----------------------------------------------------------------------------
+# PARAMETROS
+# ----------------------------------------------------------------------------
+OBJ = (r'C:/Users/sergi/Downloads/Meshy_AI_Starlit_Stag_0923134854_generate_obj'
+       r'/Meshy_AI_Starlit_Stag_0923134854_generate_obj'
+       r'/Meshy_AI_Starlit_Stag_0923134854_generate.obj')
+OUT = os.path.dirname(os.path.abspath(__file__))
+
+ANCHO_MM      = 200.0   # ancho final de la estrella (manda la escala)
+APLANAR       = 0.5     # mm de textura que se quitan a la trasera para dejarla plana
+
+PARED         = 2.0     # espesor de las paredes translucidas
+HOLGURA       = 0.2     # juego entre translucido y piedra
+ANILLO        = 11.0    # anchura de la camara anular detras de las paredes
+
+# La PARED ILUMINADA es la corona plana que rodea la boca del nicho (Z ~ +9..+12
+# en el OBJ), entre el pozo y el escalon del marco de piedra: de frente mide
+# entre 12 y 20 mm. Se extrae del modelo, no se inventa.
+ARO_ZLO       = 7.0     # ventana de Z para reconocer esa corona
+ARO_ZHI       = 17.0
+Z_ARO         = 5.5     # plano del rebaje y tope de las paredes del pozo
+FALDA         = 2.0     # pared de la falda exterior (oculta dentro de la piedra)
+CIERVO_RELIEVE = 15.0   # cuanto sobresale el ciervo de la pared del fondo
+
+TAPA_ESP      = 3.0     # espesor de la tapa (superpuesta a la trasera)
+TAPA_VUELO    = 5.0     # cuanto sobresale la tapa del anillo
+TAPA_ENCASTRE = 2.0     # espigo anular de la tapa (sello de luz)
+TAPA_ESPIGO_W = 2.0     # anchura del espigo
+
+TORNILLO_D    = 2.7     # taladro para M3 autorroscante
+TORNILLO_H    = 8.0     # profundidad del taladro en la piedra
+TORNILLO_R    = 4.5     # distancia del borde exterior del anillo
+TORNILLO_CAB  = 6.2     # avellanado en la tapa
+N_TORNILLOS   = 5
+
+CABLE_ANCHO   = 6.0     # canal del cable en la trasera
+CABLE_ANCHO_T = 3.5     # anchura arriba del canal -> se imprime sin soporte
+CABLE_PROF    = 3.0
+
+CIERVO_PARED  = 2.2     # pared del ciervo y del tallo (erosion 3D real)
+TALLO_INSET   = 1.0     # cuanto se mete el tallo respecto a la silueta del ciervo
+
+ENGINE = 'manifold'
+JS = 2  # join_style mitre
+
+
+# ----------------------------------------------------------------------------
+# utilidades
+# ----------------------------------------------------------------------------
+def secciones_xy(mesh, z, min_area=1.0):
+    s = mesh.section(plane_origin=[0, 0, z], plane_normal=[0, 0, 1])
+    if s is None:
+        return []
+    lines = [LineString(s.vertices[e.points][:, :2]) for e in s.entities
+             if len(e.points) > 2]
+    if not lines:
+        return []
+    return [p for p in polygonize(unary_union(lines)) if p.area > min_area]
+
+
+def mayor(poly):
+    if poly.geom_type in ('MultiPolygon', 'GeometryCollection'):
+        return max([g for g in poly.geoms if g.geom_type == 'Polygon'],
+                   key=lambda g: g.area)
+    return poly
+
+
+def off(poly, d):
+    return mayor(poly.buffer(d, join_style=JS, mitre_limit=8))
+
+
+def prisma(poly, z0, z1):
+    m = trimesh.creation.extrude_polygon(poly, height=z1 - z0)
+    m.apply_translation([0, 0, z0])
+    return m
+
+
+def prisma_multi(poly, z0, z1):
+    gs = list(poly.geoms) if poly.geom_type != 'Polygon' else [poly]
+    ms = [prisma(g, z0, z1) for g in gs if g.geom_type == 'Polygon' and g.area > 1e-6]
+    return ms[0] if len(ms) == 1 else trimesh.boolean.union(ms, engine=ENGINE)
+
+
+def corona(base, hueco, o, z0, z1):
+    """Prisma anular: base desplazado o, menos el hueco central."""
+    return prisma_multi(off(base, o).difference(hueco), z0, z1)
+
+
+def corona_cono(base, hueco, z0, z1, o0, o1, pasos=16):
+    """Anillo cuyo borde exterior pasa del offset o0 al o1 entre z0 y z1."""
+    trozos = []
+    zs = np.linspace(z0, z1, pasos + 1)
+    offs = np.linspace(o0, o1, pasos + 1)
+    for i in range(pasos):
+        p = off(base, (offs[i] + offs[i + 1]) / 2.0).difference(hueco)
+        if p.is_empty:
+            continue
+        trozos.append(prisma_multi(p, zs[i] - 1e-4, zs[i + 1] + 1e-4))
+    return trimesh.boolean.union(trozos, engine=ENGINE)
+
+
+def erosionar(mesh, r):
+    """Erosion 3D: interseccion de copias trasladadas (6 ejes + 8 diagonales).
+    Calibrado sobre una esfera: con r=2,2 deja entre 1,87 y 2,20 mm."""
+    dirs = [np.array(v, float) for v in
+            ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))]
+    dirs += [np.array(v, float) / np.sqrt(3) for v in
+             ((1, 1, 1), (1, 1, -1), (1, -1, 1), (1, -1, -1),
+              (-1, 1, 1), (-1, 1, -1), (-1, -1, 1), (-1, -1, -1))]
+    out = mesh
+    for d in dirs:
+        c = mesh.copy()
+        c.apply_translation(d * r)
+        out = trimesh.boolean.intersection([out, c], engine=ENGINE)
+    return out
+
+
+def limpiar(mesh, aviso=50.0):
+    """Tira las migas de las booleanas. Si se desprende algo grande, es un fallo
+    de diseno (una pieza que ha quedado aislada), no una miga: para el script."""
+    cs = mesh.split(only_watertight=False)
+    if len(cs) <= 1:
+        return mesh
+    cs = sorted(cs, key=lambda c: -c.volume)
+    if cs[1].volume > aviso:
+        raise AssertionError(
+            f'se ha desprendido un trozo de {cs[1].volume:.0f} mm3 en '
+            f'{np.round(cs[1].bounds, 1).tolist()}: hay algo aislado')
+    log(f'    (descartadas {len(cs)-1} migas, la mayor de {cs[1].volume:.2f} mm3)')
+    return cs[0]
+
+
+def bo(op, partes):
+    return getattr(trimesh.boolean, op)(partes, engine=ENGINE)
+
+
+def log(*a):
+    print(*a, flush=True)
+
+
+# ----------------------------------------------------------------------------
+# 1. cargar, escalar y aplanar la trasera
+# ----------------------------------------------------------------------------
+log('cargando', os.path.basename(OBJ))
+malla = trimesh.load(OBJ, process=False)
+S = ANCHO_MM / malla.extents[0]
+malla.apply_scale(S)
+log(f'  escala {S:.4f} mm/u  ->  {np.round(malla.extents, 2)} mm   '
+    f'cerrada={malla.is_watertight}')
+
+Z_TRASERA = round(malla.bounds[0][2] + APLANAR, 2)
+malla = trimesh.intersections.slice_mesh_plane(
+    malla, plane_normal=[0, 0, 1], plane_origin=[0, 0, Z_TRASERA], cap=True)
+malla = trimesh.Trimesh(malla.vertices, malla.faces)
+Z_FRENTE = malla.bounds[1][2]
+log(f'  trasera aplanada en Z={Z_TRASERA}   frente Z={Z_FRENTE:.2f}')
+
+
+# ----------------------------------------------------------------------------
+# 2. geometria del pozo
+# ----------------------------------------------------------------------------
+def plano_frontal_mayor(mesh, zmin, zmax):
+    n = mesh.face_normals
+    zc = mesh.vertices[mesh.faces][:, :, 2].mean(1)
+    sel = (n[:, 2] > 0.99) & (zc > zmin) & (zc < zmax)
+    h, e = np.histogram(zc[sel], bins=600, weights=mesh.area_faces[sel])
+    i = int(np.argmax(h))
+    return (e[i] + e[i + 1]) / 2.0
+
+
+def anillo_pozo(z):
+    ps = secciones_xy(malla, z, min_area=200)
+    ps.sort(key=lambda p: -p.area)
+    return max((Polygon(r) for r in ps[0].interiors), key=lambda g: g.area)
+
+
+Z_SUELO = plano_frontal_mayor(malla, Z_TRASERA + 2, 0)
+Z_BOCA = plano_frontal_mayor(malla, Z_SUELO + 5, Z_SUELO + 40)
+log(f'  fondo del nicho Z={Z_SUELO:.2f} (queda de PIEDRA)   boca Z={Z_BOCA:.2f}')
+
+# W0     = contorno del pozo justo encima del fondo = borde del fondo de piedra
+# POZO_M = contorno maximo barrido (el pozo se abre hacia la boca)
+W0 = anillo_pozo(Z_SUELO + 0.3).simplify(0.05)
+POZO_M = mayor(unary_union([anillo_pozo(z) for z in
+                            np.linspace(Z_SUELO + 0.4, 7.2, 18)]).buffer(0)).simplify(0.05)
+log(f'  fondo de piedra: area {W0.area:.0f} mm2   bbox {np.round(W0.bounds, 1)}')
+log(f'  pozo barrido: area {POZO_M.area:.0f} mm2  (se abre '
+    f'{(POZO_M.area - W0.area) / W0.length:.2f} mm hacia la boca)')
+
+qs = secciones_xy(malla, Z_TRASERA + 0.5, min_area=200)
+qs.sort(key=lambda p: -p.area)
+ESTRELLA = Polygon(qs[0].exterior)
+
+OFF_LUZ = PARED
+OFF_PIEDRA = PARED + HOLGURA
+OFF_ANILLO = OFF_PIEDRA + ANILLO
+Z_CONO0 = Z_ARO                            # la camara es un prisma recto
+
+
+def mapa_frontal(size=900):
+    """Z de la cara frontal del modelo, rasterizado (pintor de atras a delante)."""
+    from PIL import Image, ImageDraw
+    b = malla.bounds
+    ox, oy = (b[0][0] + b[1][0]) / 2, (b[0][1] + b[1][1]) / 2
+    span = max(b[1][0] - b[0][0], b[1][1] - b[0][1]) * 1.02
+    sc = size / span
+    V, F, N = malla.vertices, malla.faces, malla.face_normals
+    X = (V[:, 0] - ox) * sc + size / 2
+    Y = size / 2 - (V[:, 1] - oy) * sc
+    f = F[N[:, 2] > 0]
+    zc = V[f][:, :, 2].mean(1)
+    img = Image.new('F', (size, size), -1e4)
+    dr = ImageDraw.Draw(img)
+    for i in np.argsort(zc):
+        t = f[i]
+        dr.polygon([(X[t[0]], Y[t[0]]), (X[t[1]], Y[t[1]]), (X[t[2]], Y[t[2]])],
+                   fill=float(zc[i]))
+    return np.array(img), (ox, oy, sc, size)
+
+
+def mascara_a_poligono(mask, geo, cierre=3, suavizar=0.35):
+    """Contorno de una mascara raster -> poligono shapely en coordenadas mundo."""
+    from scipy import ndimage
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    ox, oy, sc, size = geo
+    m = ndimage.binary_closing(mask, np.ones((cierre, cierre)))
+    m = ndimage.binary_fill_holes(m)
+    fig = plt.figure()
+    cs = plt.contour(m.astype(float), levels=[0.5])
+    segs = [sg for coll in cs.allsegs for sg in coll if len(sg) > 8]
+    plt.close(fig)
+    polis = []
+    for sg in segs:
+        x = (sg[:, 0] - size / 2) / sc + ox
+        y = (size / 2 - sg[:, 1]) / sc + oy
+        q = Polygon(np.c_[x, y]).buffer(0)
+        if q.area > 50:
+            polis.append(q)
+    polis.sort(key=lambda q: -q.area)
+    out = polis[0]
+    for q in polis[1:]:
+        out = out.symmetric_difference(q) if out.contains(q) else out.union(q)
+    return mayor(out).simplify(suavizar)
+
+
+def corona_iluminada(zlo, zhi):
+    """La pared del medio: la corona plana que rodea la boca del nicho."""
+    D, geo = mapa_frontal()
+    anillo = mascara_a_poligono((D > zlo) & (D < zhi), geo)
+    anillo = anillo.difference(POZO_M.buffer(-0.3, join_style=JS, mitre_limit=8))
+    big = mayor(anillo)
+    huecos = [r for r in big.interiors if Polygon(r).area > 400]
+    return Polygon(big.exterior, huecos)
+
+
+ARO_POLY = corona_iluminada(ARO_ZLO, ARO_ZHI)
+_h = max((Polygon(r) for r in ARO_POLY.interiors), key=lambda g: g.area)
+log(f'  pared iluminada: {ARO_POLY.area:.0f} mm2, ancho medio '
+    f'{ARO_POLY.area / ((ARO_POLY.exterior.length + _h.exterior.length) / 2):.1f} mm, '
+    f'{len(ARO_POLY.interiors)} hueco(s), bbox {np.round(ARO_POLY.bounds, 1)}')
+
+AEX = mayor(Polygon(ARO_POLY.exterior).union(
+    off(POZO_M, OFF_PIEDRA + FALDA + 1.0)))   # borde exterior de la pared iluminada,
+                                              # siempre por fuera del tubo
+P_TAPA = mayor(AEX.buffer(TORNILLO_R + TAPA_VUELO, join_style=JS, mitre_limit=8)
+               .intersection(ESTRELLA.buffer(-4.0, join_style=1)))
+log(f'  hueco de la piedra: hasta el borde de la pared iluminada, Z={Z_ARO:.1f}')
+log(f'  tapa: bbox {np.round(P_TAPA.bounds, 1)}   margen al borde '
+    f'{ESTRELLA.exterior.distance(P_TAPA):.1f} mm')
+assert ESTRELLA.contains(P_TAPA), 'la tapa se sale de la estrella'
+
+
+# ----------------------------------------------------------------------------
+# 3. el ciervo
+# ----------------------------------------------------------------------------
+log('aislando el ciervo...')
+caja = prisma(POZO_M.buffer(-0.05, join_style=JS, mitre_limit=8),
+              Z_SUELO + 0.4, Z_BOCA + 4.0)
+tr = [c for c in bo('intersection', [malla, caja]).split(only_watertight=False)
+      if c.volume > 100]
+tr.sort(key=lambda c: -c.volume)
+CIERVO = tr[0]
+assert CIERVO.bounds[1][2] < Z_BOCA + 3.5, 'el ciervo llega al techo de la caja'
+
+SIL_CIERVO = trimesh.path.polygons.projected(
+    CIERVO, normal=[0, 0, 1], precise=True).buffer(0).simplify(0.05)
+SIL_CORTE = SIL_CIERVO.buffer(0.5, join_style=1).intersection(POZO_M)
+log(f'  ciervo original: vol {CIERVO.volume:.0f} mm3   Z {CIERVO.bounds[0][2]:.2f}..'
+    f'{CIERVO.bounds[1][2]:.2f}   silueta {SIL_CIERVO.area:.0f} mm2')
+
+# el ciervo deja de flotar: se recula hasta pegarlo a la pared del fondo y se
+# queda como RELIEVE de CIERVO_RELIEVE mm, conservando su contorno y la parte
+# delantera de su modelado (que es la que tiene forma)
+_atras = CIERVO.bounds[1][2] - (Z_SUELO + CIERVO_RELIEVE)
+CIERVO_REL = CIERVO.copy()
+CIERVO_REL.apply_translation([0, 0, -_atras])
+CIERVO_REL = trimesh.intersections.slice_mesh_plane(
+    CIERVO_REL, plane_normal=[0, 0, 1], plane_origin=[0, 0, Z_SUELO], cap=True)
+CIERVO_REL = trimesh.Trimesh(CIERVO_REL.vertices, CIERVO_REL.faces)
+# las pezunas se hunden 2 mm en el suelo del pozo para que el relieve quede
+# soldado al escalon interno y no como pieza suelta
+_pies = CIERVO_REL.copy()
+_pies.apply_translation([0, -2.0, 0])
+_ymin = CIERVO_REL.bounds[0][1]
+_pies = bo('intersection', [_pies, prisma(
+    sbox(-500, _ymin - 3, 500, _ymin + 6), Z_SUELO - 1, Z_SUELO + CIERVO_RELIEVE + 1)])
+CIERVO_REL = bo('union', [CIERVO_REL, _pies])
+SIL_REL = trimesh.path.polygons.projected(
+    CIERVO_REL, normal=[0, 0, 1], precise=True).buffer(0).simplify(0.05)
+log(f'  ciervo en relieve: reculado {_atras:.1f} mm, Z {Z_SUELO:.2f}..'
+    f'{Z_SUELO + CIERVO_RELIEVE:.2f}, vol {CIERVO_REL.volume:.0f} mm3, '
+    f'silueta {SIL_REL.area:.0f} mm2')
+
+
+# ----------------------------------------------------------------------------
+# 4. solidos de corte
+# ----------------------------------------------------------------------------
+log('construyendo los cortes...')
+
+
+# La piedra pierde todo lo que hay dentro del borde de la pared iluminada:
+# por ahi entra la pieza translucida entera desde atras.
+VENTANA = bo('union', [
+    prisma_multi(AEX.buffer(HOLGURA / 2, join_style=JS, mitre_limit=8),
+                 Z_TRASERA - 1, Z_ARO),
+    prisma_multi(ARO_POLY.buffer(HOLGURA / 2, join_style=JS, mitre_limit=8),
+                 Z_ARO - HOLGURA, Z_FRENTE + 1),      # rebaje de la corona
+])
+
+# lo que queda del ciervo original por encima del rebaje hay que sacarlo
+FUERA_CIERVO = prisma_multi(SIL_CORTE, Z_ARO - 0.5, Z_FRENTE + 1)
+
+# canal del cable en la cara trasera (trapecio: se imprime sin soporte)
+y_alto = AEX.bounds[1] + 4.0
+y_bajo = malla.bounds[0][1] - 1
+CANAL = bo('union', [
+    prisma(sbox(-CABLE_ANCHO / 2, y_bajo, CABLE_ANCHO / 2, y_alto),
+           Z_TRASERA - 1, Z_TRASERA + 0.8),
+    corona_cono(sbox(-CABLE_ANCHO_T / 2, y_bajo, CABLE_ANCHO_T / 2, y_alto),
+                Polygon(), Z_TRASERA + 0.8, Z_TRASERA + CABLE_PROF,
+                (CABLE_ANCHO - CABLE_ANCHO_T) / 2, 0.0, pasos=6),
+])
+
+# tornillos, por fuera del anillo, en la corona maciza
+cx, cy = POZO_M.centroid.x, POZO_M.centroid.y
+anillo_t = off(AEX, TORNILLO_R)
+TORNILLOS = []
+for k in range(N_TORNILLOS):
+    a = np.radians(90 + 360.0 / N_TORNILLOS * k)
+    ray = LineString([(cx, cy), (cx + 400 * np.cos(a), cy + 400 * np.sin(a))])
+    it = ray.intersection(anillo_t.exterior)
+    pt = list(it.geoms)[-1] if it.geom_type != 'Point' else it
+    TORNILLOS.append((pt.x, pt.y))
+for x, y in TORNILLOS:
+    assert P_TAPA.contains(Point(x, y).buffer(TORNILLO_CAB / 2 + 0.8)), \
+        f'tornillo ({x:.0f},{y:.0f}) fuera de la tapa'
+    assert not AEX.intersects(
+        Point(x, y).buffer(TORNILLO_D / 2 + 1.0)), 'tornillo dentro del hueco'
+    assert Point(x, y).distance(
+        sbox(-CABLE_ANCHO, -1e4, CABLE_ANCHO, y_alto)) > 3, 'tornillo en el canal'
+log('  tornillos en ' + ', '.join(f'({x:.0f},{y:.0f})' for x, y in TORNILLOS))
+
+TALADROS = []
+for x, y in TORNILLOS:
+    c = trimesh.creation.cylinder(radius=TORNILLO_D / 2, height=TORNILLO_H + 2)
+    c.apply_translation([x, y, Z_TRASERA + (TORNILLO_H + 2) / 2 - 1])
+    TALADROS.append(c)
+
+
+# ----------------------------------------------------------------------------
+# 5. PIEDRA
+# ----------------------------------------------------------------------------
+log('piedra...')
+PIEDRA = bo('difference', [malla, VENTANA])
+PIEDRA = bo('difference', [PIEDRA, FUERA_CIERVO])
+PIEDRA = bo('difference', [PIEDRA, CANAL])
+PIEDRA = limpiar(bo('difference', [PIEDRA] + TALADROS))
+log(f'  vol {PIEDRA.volume/1000:.1f} cm3   cerrada={PIEDRA.is_watertight}')
+
+
+# ----------------------------------------------------------------------------
+# 6. LUZ  (paredes del nicho + ciervo hueco + tallo)
+# ----------------------------------------------------------------------------
+log('pieza de luz (corona + escalon + ciervo + falda)...')
+FALDA_POLY = AEX.difference(AEX.buffer(-FALDA, join_style=JS, mitre_limit=8))
+molde = bo('union', [
+    corona(POZO_M, W0, OFF_LUZ, Z_TRASERA, Z_ARO),        # escalon interno (pozo)
+    prisma_multi(ARO_POLY, Z_ARO, Z_FRENTE + 1),          # corona iluminada
+])
+LUZ = bo('intersection', [malla, molde])
+LUZ = bo('union', [LUZ,
+                   prisma_multi(FALDA_POLY, Z_TRASERA, Z_ARO),   # falda oculta
+                   CIERVO_REL])
+
+# el ciervo, hueco, abierto por detras para que le entre la luz desde la tapa
+MACIZO = bo('union', [CIERVO_REL,
+                      prisma_multi(mayor(SIL_REL.buffer(-2.0, join_style=1)),
+                                   Z_SUELO - 10, Z_SUELO + 0.2)])
+HUECO = erosionar(MACIZO, CIERVO_PARED)
+LUZ = limpiar(bo('difference', [LUZ, HUECO]))
+log(f'  vol {LUZ.volume/1000:.1f} cm3   cerrada={LUZ.is_watertight}   '
+    f'Z {LUZ.bounds[0][2]:.2f}..{LUZ.bounds[1][2]:.2f}')
+
+
+# ----------------------------------------------------------------------------
+# 7. TAPA
+# ----------------------------------------------------------------------------
+log('tapa...')
+# espigo por dentro de la falda: centra la pieza translucida
+_e0 = AEX.buffer(-FALDA - HOLGURA, join_style=JS, mitre_limit=8)
+espigo = _e0.difference(_e0.buffer(-TAPA_ESPIGO_W, join_style=JS, mitre_limit=8))
+espigo = espigo.difference(off(POZO_M, OFF_PIEDRA))
+TAPA = bo('union', [
+    prisma(P_TAPA, Z_TRASERA - TAPA_ESP, Z_TRASERA),
+    prisma_multi(espigo, Z_TRASERA - 0.01, Z_TRASERA + TAPA_ENCASTRE),
+])
+
+# el FONDO DEL NICHO (la pared de tierra de detras del ciervo) va montado en la
+# tapa: asi el forro puede entrar por detras sin puentes que lo estorben
+PEDESTAL = bo('difference', [
+    prisma_multi(W0.buffer(-HOLGURA, join_style=JS, mitre_limit=8), Z_TRASERA, Z_SUELO),
+    prisma_multi(mayor(SIL_REL.buffer(-2.5, join_style=1)), Z_TRASERA - 1, Z_SUELO + 1)])
+TAPA = bo('union', [TAPA, PEDESTAL])
+log(f'  + fondo del nicho: {PEDESTAL.volume/1000:.1f} cm3, {Z_SUELO - Z_TRASERA:.1f} mm de grueso')
+
+# muesca del cable en el espigo + avellanados
+muesca = prisma(sbox(-CABLE_ANCHO / 2 - HOLGURA, P_TAPA.bounds[1] - 5,
+                     CABLE_ANCHO / 2 + HOLGURA, y_alto + 2),
+                Z_TRASERA - 0.01, Z_TRASERA + TAPA_ENCASTRE + 0.01)
+TAPA = bo('difference', [TAPA, muesca])
+
+PASOS = []
+for x, y in TORNILLOS:
+    c = trimesh.creation.cylinder(radius=TORNILLO_D / 2 + 0.45, height=TAPA_ESP + 4)
+    c.apply_translation([x, y, Z_TRASERA - TAPA_ESP + (TAPA_ESP + 4) / 2 - 2])
+    PASOS.append(c)
+    k = trimesh.creation.cone(radius=TORNILLO_CAB / 2, height=TORNILLO_CAB / 2)
+    k.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [1, 0, 0]))
+    k.apply_translation([x, y, Z_TRASERA - TAPA_ESP + TORNILLO_CAB / 2])
+    PASOS.append(k)
+TAPA = limpiar(bo('difference', [TAPA] + PASOS))
+log(f'  vol {TAPA.volume/1000:.1f} cm3   cerrada={TAPA.is_watertight}')
+
+log(f'  hueco para el LED dentro de la pieza translucida: '
+    f'{(AEX.area - POZO_M.area) / 100:.0f} cm2 de planta, '
+    f'{Z_ARO - Z_TRASERA:.0f} mm de fondo')
+
+
+# ----------------------------------------------------------------------------
+# 8. exportar
+# ----------------------------------------------------------------------------
+log('exportando...')
+for nombre, m in (('1_piedra', PIEDRA), ('2_luz', LUZ), ('3_tapa', TAPA)):
+    m.export(os.path.join(OUT, nombre + '.stl'))
+    m.export(os.path.join(OUT, nombre + '.ply'))
+    log(f'  {nombre}   {len(m.faces):7d} caras   {m.volume/1000:6.1f} cm3   '
+        f'{np.round(m.extents,1)} mm')
+
+esc = trimesh.Scene()
+for n, m in (('piedra', PIEDRA), ('luz', LUZ), ('tapa', TAPA)):
+    esc.add_geometry(m, node_name=n)
+esc.export(os.path.join(OUT, 'montada.3mf'))
+
+with open(os.path.join(OUT, 'contornos.wkt'), 'w') as f:
+    f.write(SIL_CIERVO.wkt + '\n' + POZO_M.wkt + '\n' + W0.wkt + '\n')
+np.save(os.path.join(OUT, 'cotas.npy'), np.array([
+    S, Z_TRASERA, Z_SUELO, Z_BOCA, Z_FRENTE, Z_ARO, Z_CONO0,
+    OFF_LUZ, OFF_PIEDRA, OFF_ANILLO, TAPA_ESP, CIERVO_RELIEVE]))
+log('hecho')
