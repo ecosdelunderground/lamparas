@@ -151,13 +151,20 @@ Hecho:
 - `verificar.py`: contornos sin dientes y barrido de lengüetas/rendijas < 0,8 mm
   en lo construido (tapa entera, luz fuera del ciervo). **49/50**.
 
-Único fallo: paredes del pozo, 17 de 573 puntos a más de 1,2 mm del original
-(mediana 0,06, máx. 1,65 mm), por enderezarlas en 10 lados rectos.
+- **Borde de la corona por el canto (`CORONA_BORDE = 'canto'`)**, a petición de
+  Sergi (24-09): las paredes corona→escalón de Meshy eran rampas con nervaduras
+  y cantos dentados. El borde de la corona se traza ahora por el canto de arriba
+  de esa pared (Z_ESCALON − 0,5, sacado 0,4 mm sobre la cara plana): el rebaje
+  se lleva la rampa entera y deja una pared vertical lisa cuyo canto corta en
+  perpendicular la cara plana del escalón (Z 21,19). La corona pasa a 4 544 mm²
+  (10,4 mm de ancho medio). Probado antes 'fuera' (costura en sierra) y
+  'dentro' (tira de piedra); ver comparación en la conversación.
+- Eje de simetría medido: X = 0 sin giro; alturas de terrazas simétricas
+  (mediana 0,08 mm); las paredes difieren unos mm de un lado a otro.
 
-Pendiente de decisión de Sergi — defectos que trae el OBJ de Meshy
-(`defectos_meshy.png`): nervaduras y cantos dentados en las paredes de los
-escalones del marco, y una pata delantera modelada como una tabla plana.
-Arreglarlos es retocar la superficie de Meshy.
+`verificar.py`: **50/50**.
+
+Queda de Meshy sin tocar: la pata delantera modelada como una tabla plana.
 
 ## Cómo trabaja Sergi (importante)
 

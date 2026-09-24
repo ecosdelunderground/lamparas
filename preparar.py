@@ -50,8 +50,14 @@ TOL_CORONA    = 1.2
 # (deja una tira de piedra a la altura de la corona); 'fuera' = hasta la pared
 # del escalon (la corona llega a la pared; el corte entra 0-2*TOL_FUERA en ella
 # y, al cruzar en rasante la pared texturada de Meshy, deja costura en sierra)
-CORONA_BORDE  = 'dentro'
+CORONA_BORDE  = 'canto'
 TOL_FUERA     = 0.6
+# 'canto' = por el canto de arriba de la pared corona->escalon: el rebaje se
+# lleva la rampa de Meshy entera y deja una pared vertical cuyo canto corta la
+# cara plana del escalon en perpendicular (sin rasantes, sin sierra)
+CANTO_BAJO    = 0.5     # el canto se toma esto por debajo del plano del escalon
+CANTO_FUERA   = 0.4     # y el borde se saca esto hacia fuera, sobre la cara plana
+CANTO_TOL     = 0.5     # tolerancia de enderezado de ese borde
 DIENTE_AREA   = 2.0     # vertices de los contornos que se quitan: triangulo < esto (mm2)
 ESQUINA_MAX   = 3.0     # lados cortos: se rehace la esquina si el cruce esta a < esto (mm)
 ESQUINA_AREA  = 5.0     # ... y el triangulo que cambia es < esto (mm2)
@@ -480,10 +486,22 @@ if CORONA_BORDE == 'dentro':
     # se mete TOL hacia dentro antes de enderezar: el contorno recto nunca se
     # sale del escalon original, pero deja una tira de piedra antes de el
     AEX = mayor(_ext.buffer(-TOL_CORONA, join_style=1).simplify(TOL_CORONA))
-else:
+elif CORONA_BORDE == 'fuera':
     # se saca TOL_FUERA hacia fuera antes de enderezar: el contorno recto cubre
     # toda la zona plana y llega a la pared del escalon (entra 0-2*TOL_FUERA)
     AEX = mayor(_ext.buffer(TOL_FUERA, join_style=1).simplify(TOL_FUERA))
+else:   # 'canto'
+    Z_ESCALON = plano_dominante(malla, Z_CORONA + 5, Z_CORONA + 14)
+    import shapely as _sh
+    _ox, _oy, _sc, _n = GEO
+    _jj, _ii = np.mgrid[0:_n, 0:_n]
+    _cerca = _sh.contains(_ext.buffer(8.0), _sh.points(
+        ((_ii - _n / 2) / _sc + _ox).ravel(), ((_n / 2 - _jj) / _sc + _oy).ravel())).reshape(D.shape)
+    _can = Polygon(mascara_a_poligono((D > Z_CORONA - 3.5) & (D < Z_ESCALON - CANTO_BAJO) & _cerca,
+                                      GEO).exterior)
+    AEX = mayor(_can.buffer(CANTO_FUERA, join_style=1).simplify(CANTO_TOL))
+    log(f'  escalon en Z={Z_ESCALON:.2f}; borde de la corona por su canto '
+        f'({_can.area - _ext.area:.0f} mm2 mas que la zona plana)')
 _min = off(POZO, PARED + HOLGURA + FALDA + 0.3)   # minimo para que quepa la falda
 _fuera = _min.difference(_ext)
 log(f'  (la falda pide {_fuera.area:.0f} mm2 por fuera del escalon del marco, '

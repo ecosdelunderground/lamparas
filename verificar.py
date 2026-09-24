@@ -259,13 +259,15 @@ else:
     vista = (~shapely.contains(SIL_CIERVO.buffer(0.6), xy)) & (sup[:, 2] > Z_TRASERA + 3.5)
     dentro = shapely.contains(AEX.buffer(0.3), xy)
     mal_m = vista & ~dentro & (dd > 0.3)
-    # dentro de AEX: por encima de la corona es el marco que quita la falda
-    # (opcion B, aceptada); por debajo, las paredes del pozo enderezadas
-    b_ok = vista & dentro & (sup[:, 2] > Z_CORONA + 0.5)
+    # dentro de AEX, por encima de la junta: la corona (plano) y la pared
+    # vertical que sustituye a la rampa de Meshy hasta el escalon, y el marco
+    # que quita la falda (opcion B): rehecho a proposito. Por debajo de la
+    # junta, las paredes del pozo enderezadas: esas si se comparan.
+    b_ok = vista & dentro & (sup[:, 2] > Z_JUNTA)
     pz = vista & dentro & ~b_ok
     mal_c = pz & (dd > 1.2)
     log(f'  marco: {mal_m.sum()} de {(vista & ~dentro).sum()} puntos se apartan > 0,3 mm')
-    log(f'  marco quitado por la falda (opcion B, aceptado): {(b_ok & (dd > 1.2)).sum()} puntos')
+    log(f'  corona, pared vertical hasta el escalon y falda (rehechos): {(b_ok & (dd > 1.2)).sum()} puntos')
     if pz.any():
         log(f'  pozo y corona: {mal_c.sum()} de {pz.sum()} puntos se apartan > 1,2 mm; '
             f'percentiles 50/90/99/max: {np.round(np.percentile(dd[pz], [50, 90, 99, 100]), 2).tolist()} mm')

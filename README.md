@@ -16,8 +16,9 @@ booleanas: ninguna superficie se reconstruye a mano.
 | la de detrás del ciervo | `3_tapa` (pedestal) | opaco |
 | el ciervo, en relieve | `2_luz` | **translúcido** |
 
-La pared iluminada se saca del propio modelo: es la corona plana a Z ≈ +9…+12 mm,
-**4 098 mm², de 9,1 mm de ancho medio** (hasta 20 mm en las puntas). El escalón
+La pared iluminada es la corona plana a Z = +10,90, **4 544 mm², de 10,4 mm de
+ancho medio**. Llega hasta el canto del primer escalón del marco: la rampa
+texturada de Meshy entre los dos se sustituye por una pared vertical lisa. El escalón
 interno son las cinco paredes del pozo, 23,9 mm de caída. El fondo del nicho no
 emite: son **13,4 mm de opaco macizo**, y va montado en la tapa.
 
