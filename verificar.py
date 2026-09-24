@@ -4,7 +4,7 @@
 Lee lo que escribe preparar.py:
   cotas.npy     = [S, Z_TRASERA, Z_SUELO, Z_CORONA, Z_JUNTA, Z_FRENTE,
                    OFF_LUZ, OFF_PIEDRA, TAPA_ESP, CIERVO_RELIEVE, HOLGURA, FALDA]
-  contornos.wkt = SIL_CIERVO, POZO, AEX, CORONA
+  contornos.wkt = SIL_CIERVO, POZO, AEX, CORONA, REHECHO (lo rehecho a proposito)
 
 La seccion 4 (comparar con el modelo original) necesita el OBJ de Meshy. Si no
 esta, esa seccion sale como NO EJECUTADA y el total no puede ser completo.
@@ -13,7 +13,7 @@ import os
 import numpy as np
 import trimesh
 import shapely
-from shapely.geometry import Polygon, Point, box
+from shapely.geometry import Polygon, Point
 from shapely.ops import unary_union
 from shapely import wkt as _wkt
 from scipy.spatial import cKDTree
@@ -65,8 +65,8 @@ def pared_minima(g, min_hueco=3.0):
 P = trimesh.load(os.path.join(OUT, '1_piedra.ply'), process=False)
 L = trimesh.load(os.path.join(OUT, '2_luz.ply'), process=False)
 T = trimesh.load(os.path.join(OUT, '3_tapa.ply'), process=False)
-SIL_CIERVO, POZO, AEX, CORONA = [_wkt.loads(l) for l in
-                                 open(os.path.join(OUT, 'contornos.wkt')).read().splitlines()[:4]]
+SIL_CIERVO, POZO, AEX, CORONA, REHECHO = [_wkt.loads(l) for l in
+                                          open(os.path.join(OUT, 'contornos.wkt')).read().splitlines()[:5]]
 (S, Z_TRASERA, Z_SUELO, Z_CORONA, Z_JUNTA, Z_FRENTE, OFF_LUZ, OFF_PIEDRA,
  TAPA_ESP, CIERVO_RELIEVE, HOLGURA, FALDA, Z_RELLENO, RELLENO_ANCHO) = np.load(
     os.path.join(OUT, 'cotas.npy'))
@@ -119,12 +119,14 @@ for n, pol in (('POZO', POZO), ('borde de la corona', AEX)):
         f'triangulo min {tri.min():.1f} mm2)')
 
 # lenguetas y rendijas de menos de 0,8 mm en lo que se construye (no en la
-# superficie de Meshy): toda la tapa y la pieza de luz fuera del ciervo
-# (el ciervo y sus pezunas son modelado de Meshy: sus detalles no cuentan)
-for n, m, zona in (('tapa', T, None),
-                   ('luz fuera del ciervo', L, AEX.buffer(1).difference(POZO.buffer(-0.3))
-                    .difference(SIL_CIERVO.buffer(1.5)))):
-    e = estrechos(m, zona=zona)
+# superficie de Meshy): toda la tapa, la pieza de luz fuera del ciervo (el
+# ciervo y sus pezunas son modelado de Meshy: sus detalles no cuentan) y lo
+# rehecho del marco de piedra (y sus costuras con Meshy)
+for n, m, zona, paso in (('tapa', T, None, 0.25),
+                         ('luz fuera del ciervo', L, AEX.buffer(1).difference(POZO.buffer(-0.3))
+                          .difference(SIL_CIERVO.buffer(1.5)), 0.25),
+                         ('piedra rehecha', P, REHECHO.buffer(0.5).difference(AEX.buffer(0.5)), 0.5)):
+    e = estrechos(m, zona=zona, paso=paso)
     sitios = sorted({(round(q.centroid.x), round(q.centroid.y)) for _, _, q in e})
     chk(not e, f'{n}: {len(e)} lenguetas o rendijas de menos de 0,8 mm'
         + (f' en {sitios[:6]}' if e else ''))
@@ -248,9 +250,8 @@ else:
             continue
         ca, cb = contorno(a), contorno(bb)
         # fuera de la corona y de lo rehecho a proposito (escalon, terraza junto
-        # a el, valle de abajo)
-        dif = ca.symmetric_difference(cb).difference(AEX.buffer(RELLENO_ANCHO + 0.3)).difference(
-            box(-12.5, -200, 12.5, -71.5))
+        # a el, rombo de abajo, canto de las caras de abajo)
+        dif = ca.symmetric_difference(cb).difference(REHECHO.buffer(0.3))
         peor_ext = max(peor_ext, dif.area / ca.length)
     chk(peor_ext < 0.05, f'silueta exterior intacta fuera de lo rehecho ({peor_ext:.3f} mm)')
 
@@ -262,14 +263,13 @@ else:
     xy = shapely.points(sup[:, :2])
     vista = (~shapely.contains(SIL_CIERVO.buffer(0.6), xy)) & (sup[:, 2] > Z_TRASERA + 3.5)
     dentro = shapely.contains(AEX.buffer(0.3), xy)
-    # rehecho a proposito (trazado de la Ciudadela, 24-09): el escalon y la
-    # franja de terraza por fuera de el (RELLENO_ANCHO mm desde la corona) y el
-    # valle de abajo, que copia el relieve del valle lateral
-    rehecho = shapely.contains(AEX.buffer(RELLENO_ANCHO + 0.3), xy) | \
-        shapely.contains(box(-12.5, -200, 12.5, -71.5), xy)
+    # rehecho a proposito (trazado de la Ciudadela, 24-09): el escalon, la
+    # franja de terraza por fuera de el, el rombo de abajo (copia del lateral) y
+    # el canto de las dos caras de abajo
+    rehecho = shapely.contains(REHECHO.buffer(0.3), xy)
     mal_m = vista & ~dentro & ~rehecho & (dd > 0.3)
     log(f'  marco: {mal_m.sum()} de {(vista & ~dentro & ~rehecho).sum()} puntos se apartan > 0,3 mm')
-    log(f'  rehecho a proposito (escalon, terraza junto a el, valle de abajo): '
+    log(f'  rehecho a proposito (escalon, terraza, rombo de abajo, canto de abajo): '
         f'{(vista & ~dentro & rehecho).sum()} puntos, hasta {dd[vista & ~dentro & rehecho].max():.1f} mm')
     pz = vista & dentro & (sup[:, 2] < Z_JUNTA)
     if pz.any():

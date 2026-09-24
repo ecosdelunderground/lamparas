@@ -67,3 +67,20 @@ def estrechos(mesh, w=0.4, amin=0.2, paso=0.25, zona=None):
                 if q.geom_type == 'Polygon' and q.area > amin:
                     hall.append((round(float(z), 2), tipo, q))
     return hall
+
+
+def alturas(mesh, res=0.1, lim=101.0):
+    """Mapa de alturas de la cara de delante (Z maxima en cada punto XY), con la
+    Z interpolada dentro de cada triangulo (z-buffer). Fila 0 = Y +lim, columna
+    0 = X -lim; -inf donde no hay pieza."""
+    from render import _zbuffer
+    n = int(round(2 * lim / res))
+    v = np.asarray(mesh.vertices)
+    f = np.asarray(mesh.faces)[mesh.face_normals[:, 2] > 1e-6]
+    px = (v[:, 0] + lim) / res
+    py = (lim - v[:, 1]) / res
+    img = np.zeros((n, n, 3))
+    zb = np.full((n, n), -np.inf)
+    _zbuffer(np.ascontiguousarray(px[f]), np.ascontiguousarray(py[f]),
+             np.ascontiguousarray(v[:, 2][f]), np.zeros((len(f), 3)), n, n, img, zb)
+    return zb

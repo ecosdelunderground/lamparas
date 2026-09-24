@@ -27,7 +27,7 @@ import trimesh
 import manifold3d
 from shapely.geometry import Polygon, LineString, Point, box as sbox
 from shapely.ops import unary_union, polygonize
-from geo import xy_material
+from geo import xy_material, alturas
 import ciudadela
 
 # ----------------------------------------------------------------------------
@@ -59,11 +59,29 @@ TERRAZA_ANCHO = 8.0     # por fuera de la pared escalon->terraza se rellena hast
                         # terraza en esta franja (entierra la rampa de Meshy y lo
                         # que queda del trazado viejo)
 TERRAZA_MIN   = 25.8    # lo que esta por encima de esto en el marco es terraza
-VALLE_ABAJO   = (0.0, -81.15)   # centro de la muesca del valle de abajo (silueta)
-VALLE_LADO    = (72.1, -30.0)   # centro de la muesca del valle lateral derecho
-VALLE_ANCHO   = 12.0    # el valle de abajo que se rehace: |x| < esto ...
-VALLE_TECHO   = -72.0   # ... y por debajo de esta y
-VALLE_MARGEN  = 0.15    # solo se rellena donde la copia sube mas que esto
+TERRAZA_LIMPIA = 3.0    # la terraza de Meshy se da por buena a partir de esta distancia
+                        # de la pared (mas cerca queda el labio rugoso de la rampa vieja)
+TERRAZA_BAJA  = 0.4     # ... y si no queda mas de esto por debajo de su entorno
+CANTO_R       = 1.0     # radio del canto redondo de la pared escalon->terraza
+CAMPO_PASO    = 0.25    # lado de los triangulos de las superficies rehechas (mm)
+COSTURA       = 0.03    # costura con Meshy: lo rehecho pasa de esto por encima a
+RAMPA         = 2.0     # 2x esto por debajo en esta franja, y las dos superficies se
+                        # cruzan en angulo (ni escalon ni roce que las pellizque)
+# rombo de la punta de abajo: copia de la malla real de media punta lateral derecha,
+# llevada con una afin de sus tres vertices (L = union de las ranuras de dentro,
+# T y O = esquina y punta de la silueta) a los de abajo, y reflejada en X = 0
+ROMBO_LAT     = ((63.7, -28.7), (73.67, -21.28), (79.03, -32.23))
+ROMBO_ABAJO   = ((0.0, -73.3), (7.6, -81.18), (0.0, -85.5))
+ROMBO_BORDE   = 5.5     # se coge tambien esta franja por fuera del lado L-T (su ranura
+                        # entera y la costura, que queda en la terraza lisa)
+# el canto de fuera de las dos caras de abajo (ondulado en Meshy): perfil medio
+# barrido a lo largo de la cara, fundido con lo de Meshy en los extremos
+CARA_ABAJO    = ((57.37, -98.87), (11.78, -88.89))   # la derecha; la izquierda, en espejo
+BARRIDO_ANCHO = 4.5     # ancho de la franja rehecha, desde el borde (mm)
+BARRIDO_Z0    = 19.5    # altura a la que se ajusta la recta de la pared
+BARRIDO_FUERA = 0.05    # la pared rehecha queda esto por fuera de esa recta
+BARRIDO_FUNDE = 5.0     # en los extremos se funde con Meshy a lo largo de esto (mm)
+BARRIDO_MARGEN = 4.5    # y los extremos quedan esto antes de las esquinas de la cara
 TOL_FUERA     = 0.6
 # 'canto' = por el canto de arriba de la pared corona->escalon: el rebaje se
 # lleva la rampa de Meshy entera y deja una pared vertical cuyo canto corta la
@@ -381,10 +399,11 @@ def pulir(mesh, nombre='', tol=TOL_PULIDO):
         _, inv, cnt = np.unique(mesh.vertices, axis=0, return_inverse=True,
                                 return_counts=True)
         dup = mesh.vertices[cnt[inv] > 1]
+        sitios = np.unique(np.round(dup / 2.0) * 2.0, axis=0)
         raise AssertionError(
-            f'{nombre}: {len(dup)} vertices en contacto sin espesor en '
-            f'Z {np.unique(np.round(dup[:, 2], 2))[:6].tolist()}, '
-            f'XY ~{np.round(dup[:, :2].mean(0), 1).tolist()}: hay dos solidos '
+            f'{nombre}: {len(dup)} vertices en contacto sin espesor, en '
+            f'{np.round(sitios[:8], 0).astype(int).tolist()}'
+            f'{" ..." if len(sitios) > 8 else ""}: hay dos solidos '
             f'que se tocan en una arista o un punto')
     M = manifold3d.Manifold(manifold3d.Mesh(
         vert_properties=np.asarray(mesh.vertices, np.float32),
@@ -414,6 +433,17 @@ def pulir(mesh, nombre='', tol=TOL_PULIDO):
 
 def bo(op, partes):
     return getattr(trimesh.boolean, op)(partes, engine=ENGINE)
+
+
+def a_manifold(m):
+    return manifold3d.Manifold(manifold3d.Mesh(
+        vert_properties=np.asarray(m.vertices, np.float32),
+        tri_verts=np.asarray(m.faces, np.uint32)))
+
+
+def a_trimesh(M):
+    g = M.to_mesh()
+    return trimesh.Trimesh(g.vert_properties[:, :3], g.tri_verts, process=False)
 
 
 # ----------------------------------------------------------------------------
@@ -694,92 +724,280 @@ if CORONA_BORDE == 'canto':
     log(f'  cara del escalon allanada a Z={Z_RELLENO:.2f} en {RELLENO_ANCHO:.0f} mm por fuera '
         f'de la corona (+{(MARCO.volume - malla.volume):.0f} mm3)')
 elif CORONA_BORDE == 'ciudadela':
+    import shapely as _sh
+    from scipy import ndimage
     Z_RELLENO = Z_ESCALON + RELLENO_SOBRE
     RELLENO_ANCHO = ciudadela.ESCALON + TERRAZA_ANCHO
-    # (a) por fuera de la pared escalon->terraza: se rellena hasta la terraza con
-    # una superficie que copia su altura (la terraza de Meshy mas cercana, punto
-    # a punto). Entierra la rampa de Meshy y lo que quede del trazado viejo.
-    from scipy import ndimage
-    _ox, _oy, _sc, _n = GEO
-    _terr = D >= TERRAZA_MIN
-    _, (_jt, _it) = ndimage.distance_transform_edt(~_terr, return_indices=True)
-    T_TERRAZA = ndimage.median_filter(D[_jt, _it], size=5)
-
-    def _t_terraza(x, y):
-        c = np.clip(np.round((x - _ox) * _sc + _n / 2).astype(int), 0, _n - 1)
-        r = np.clip(np.round(_n / 2 - (y - _oy) * _sc).astype(int), 0, _n - 1)
-        return T_TERRAZA[r, c]
-    _anillo = W2.buffer(TERRAZA_ANCHO, join_style=JS, mitre_limit=8).difference(
-        W2.buffer(-0.05, join_style=JS, mitre_limit=8)).intersection(ESTRELLA.buffer(-1.0))
-    _z_arriba = 40.0
-    _M = manifold3d.Manifold(manifold3d.Mesh(
-        vert_properties=np.asarray(prisma_multi(_anillo, Z_JUNTA, _z_arriba).vertices, np.float32),
-        tri_verts=np.asarray(prisma_multi(_anillo, Z_JUNTA, _z_arriba).faces, np.uint32)))
-    _M = _M.refine_to_length(0.8)
-
-    def _alza(v):
-        v = np.array(v, dtype=np.float64)
-        t = np.maximum(_t_terraza(v[:, 0], v[:, 1]), Z_RELLENO + 0.5)
-        f = (v[:, 2] - Z_JUNTA) / (_z_arriba - Z_JUNTA)
-        v[:, 2] = Z_JUNTA + f * (t - Z_JUNTA)
-        return v
-    _g = _M.warp_batch(_alza).to_mesh()
-    TERRAZA = trimesh.Trimesh(_g.vert_properties[:, :3], _g.tri_verts, process=False)
-    # (b) el escalon: entre las dos paredes, un plano exacto (se rellena por debajo
-    # y se corta todo lo que sobresale); la pared escalon->terraza queda vertical
-    MARCO = bo('union', [malla, TERRAZA, prisma_multi(W2, Z_JUNTA, Z_RELLENO)])
-    MARCO = bo('difference', [MARCO, prisma_multi(W2, Z_RELLENO, Z_FRENTE + 1)])
-    # (c) el valle de abajo tenia el rombo vaciado por una ranura en V hasta el
-    # escalon: se le copia el relieve del valle lateral derecho (terraza, punta y
-    # facetas), girado con la simetria del pentagono y a la altura de la terraza
-    # de abajo. La silueta exterior no cambia.
+    # mapa de alturas de Meshy (Z interpolada, 0,1 mm) y un muestreador bilineal
+    _LIM, _RES = 101.0, 0.1
+    H = alturas(malla, _RES, _LIM)
+    _n = H.shape[0]
     _jj, _ii = np.mgrid[0:_n, 0:_n]
-    _X = (_ii - _n / 2) / _sc + _ox
-    _Y = (_n / 2 - _jj) / _sc + _oy
-    _C = np.array([0.0, -8.0])                        # centro del pentagono
-    _m_abajo, _m_lado = np.array(VALLE_ABAJO), np.array(VALLE_LADO)
-    _ang = np.arctan2(*(_m_lado - _C)[::-1]) - np.arctan2(*(_m_abajo - _C)[::-1])
-    _rot = np.array([[np.cos(_ang), -np.sin(_ang)], [np.sin(_ang), np.cos(_ang)]])
-    _eje = (_m_lado - _C) / np.linalg.norm(_m_lado - _C)
-    _desp = np.linalg.norm(_m_lado - _C) - np.linalg.norm(_m_abajo - _C)
-    _terr_lado = float(np.median(D[(np.hypot(_X - _m_lado[0], _Y - _m_lado[1]) < 16) & (D >= TERRAZA_MIN) & (D < 28.1)]))
-    _terr_abajo = float(np.median(D[(np.abs(_X) < 16) & (_Y > -75) & (_Y < -70) & (D >= TERRAZA_MIN)]))
-    _valido = D > -100
-    _, (_jv, _iv) = ndimage.distance_transform_edt(~_valido, return_indices=True)
-    _Dv = D[_jv, _iv]
+    HX = -_LIM + (_ii + 0.5) * _RES
+    HY = _LIM - (_jj + 0.5) * _RES
+    _, (_jv, _iv) = ndimage.distance_transform_edt(~np.isfinite(H), return_indices=True)
+    HS = H[_jv, _iv]         # fuera de la pieza, el valor mas cercano (para muestrear)
 
-    def _t_valle(x, y):
-        pq = (np.c_[x, y] - _C) @ _rot.T + _C + _eje * _desp   # punto equivalente del valle lateral
-        c = np.clip(np.round((pq[:, 0] - _ox) * _sc + _n / 2).astype(int), 0, _n - 1)
-        r = np.clip(np.round(_n / 2 - (pq[:, 1] - _oy) * _sc).astype(int), 0, _n - 1)
-        return _Dv[r, c] + (_terr_abajo - _terr_lado)
-    # solo se anade material donde la copia queda por encima de lo que hay (la
-    # ranura y sus facetas); donde ya coinciden (la terraza) no se toca: dos
-    # superficies casi iguales se pellizcarian
-    _zona_px = (np.abs(_X) < VALLE_ANCHO) & (_Y < VALLE_TECHO) & (D > -100)
-    _xs, _ys = _X[_zona_px], _Y[_zona_px]
-    _sube = np.zeros_like(D, dtype=bool)
-    _sube[_zona_px] = _t_valle(_xs, _ys) > D[_zona_px] + VALLE_MARGEN
-    _zona = mayor(abrir(mascara_a_poligono(_sube, GEO, cierre=3).intersection(
-        ESTRELLA.buffer(-1.0, join_style=1)), 1.0))
-    _Mv = manifold3d.Manifold(manifold3d.Mesh(
-        vert_properties=np.asarray(prisma(_zona, Z_JUNTA, _z_arriba).vertices, np.float32),
-        tri_verts=np.asarray(prisma(_zona, Z_JUNTA, _z_arriba).faces, np.uint32))).refine_to_length(0.4)
+    def muestrear(M, x, y):
+        return ndimage.map_coordinates(M, [(_LIM - np.asarray(y)) / _RES - 0.5,
+                                           (np.asarray(x) + _LIM) / _RES - 0.5],
+                                       order=1, mode='nearest')
 
-    def _alza_valle(v):
-        v = np.array(v, dtype=np.float64)
-        t = np.maximum(_t_valle(v[:, 0], v[:, 1]), Z_JUNTA + 1.0)
-        v[:, 2] = Z_JUNTA + (v[:, 2] - Z_JUNTA) / (_z_arriba - Z_JUNTA) * (t - Z_JUNTA)
-        return v
-    _g = _Mv.warp_batch(_alza_valle).to_mesh()
-    VALLE = trimesh.Trimesh(_g.vert_properties[:, :3], _g.tri_verts, process=False)
-    MARCO = bo('union', [MARCO, VALLE])
-    log(f'  marco: escalon plano a Z={Z_RELLENO:.2f}, pared vertical hasta la terraza, '
-        f'terraza rellenada {TERRAZA_ANCHO:.0f} mm; valle de abajo = copia del lateral '
-        f'girada {np.degrees(_ang):.1f} grados (terraza {_terr_lado:.2f} -> {_terr_abajo:.2f}; '
-        f'{_zona.area:.0f} mm2 rellenados)')
+    def a_costura(z, x, y, e, guarda=True, sobre=COSTURA, bajo=2 * COSTURA):
+        """Costura sin escalon con Meshy. Lo rehecho llega RAMPA mm mas alla del
+        corte de Meshy (e = distancia a su borde): en el corte queda COSTURA por
+        encima de Meshy (tapa su cara cortada) y en su borde, 2*COSTURA por debajo
+        (queda dentro). En medio las dos superficies se cruzan en angulo, sin
+        tocarse de refilon (eso deja pellizcos) y sin escalon a la vista."""
+        e = np.asarray(e)
+        hs = muestrear(HS, x, y)
+        w = np.clip(1.0 - e / RAMPA, 0, 1)
+        w = w * w * (3 - 2 * w)
+        v = np.clip(1.0 - (e - RAMPA) / 1.0, 0, 1) * guarda   # junto al corte, nunca bajo Meshy
+        v = v * v * (3 - 2 * v)
+        arriba = z + v * (np.maximum(z, hs) - z) + sobre
+        return (1 - w) * arriba + w * (np.minimum(z, hs) - bajo)
+
+    def campo(poly, z0, fz, paso=CAMPO_PASO):
+        """Solido sobre `poly` entre z0 y la superficie z = fz(x, y)."""
+        z1 = z0 + 1.0      # prisma bajo: sus paredes no se subdividen de mas
+        M = a_manifold(prisma_multi(poly, z0, z1)).refine_to_length(paso)
+
+        def w(v):
+            v = np.array(v, dtype=np.float64)
+            v[:, 2] = z0 + (v[:, 2] - z0) / (z1 - z0) * (fz(v[:, 0], v[:, 1]) - z0)
+            return v
+        return M.warp_batch(w)
+
+    # (b) el rombo de la punta de abajo: Meshy tiene ahi el rombo hundido. Se
+    # copia la malla de media punta lateral (la derecha, de la trasera arriba:
+    # ranuras, rombo, canto y pared), se lleva con una afin a media punta de
+    # abajo y se refleja. Las alturas se ajustan en la costura con la terraza.
+    _src = np.array(ROMBO_LAT)
+    _dst = np.array(ROMBO_ABAJO)
+    _A = np.linalg.solve(np.c_[_src, np.ones(3)], _dst).T     # dst = A @ [x, y, 1]
+
+    def _a_abajo(xy):
+        return xy @ _A[:, :2].T + _A[:, 2]
+
+    def _normal(p, q, lejos_de):
+        e = (q - p) / np.linalg.norm(q - p)
+        nv = np.array([-e[1], e[0]])
+        return -nv if np.dot(lejos_de - p, nv) > 0 else nv
+    _L, _T, _O = _src
+    _nLT, _nLO, _nTO = _normal(_L, _T, _O), _normal(_L, _O, _T), _normal(_T, _O, _L)
+    _eto = (_O - _T) / np.linalg.norm(_O - _T)
+    _mTO = (_T + _O) / 2
+    _borde = [_L + _nLT * ROMBO_BORDE, _T + _nLT * ROMBO_BORDE]
+    _zona_src = unary_union([
+        Polygon(_src),
+        Polygon([_L, _T, _borde[1], _borde[0]]),        # franja sobre la terraza (costura)
+        Polygon([_L, _O, _O + _nLO, _L + _nLO]),         # 1 mm pasado el eje: se abre en X = 0
+        Polygon([_mTO, _O + _eto * 2, _O + _eto * 2 + _nTO * 2, _mTO + _nTO * 2]),  # fuera de la punta
+    ]).buffer(0)
+    _lc = LineString(_borde)
+    _cost = np.array([(q.x, q.y) for q in _lc.interpolate(np.linspace(0.1, 0.9, 60),
+                                                           normalized=True)])
+    _h_lat = muestrear(HS, _cost[:, 0], _cost[:, 1])
+    _dz = float(np.median(muestrear(HS, *_a_abajo(_cost).T) - _h_lat))
+    _z_terr = float(np.median(_h_lat))
+    _pieza = bo('intersection', [malla, prisma(_zona_src, Z_TRASERA - 1.0, Z_FRENTE + 1.0)])
+    _trozos = _pieza.split(only_watertight=False)     # (Meshy tiene granitos sueltos)
+    _pieza = max(_trozos, key=lambda c: c.volume)
+    log(f'  rombo: {len(_trozos) - 1} trozos sueltos de Meshy fuera de la copia')
+    _pieza = a_trimesh(a_manifold(_pieza).refine_to_length(0.3))
+    _v = _pieza.vertices.copy()
+    _v[:, :2] = _a_abajo(_v[:, :2])
+    _v[:, 2] += _dz * (_v[:, 2] - Z_TRASERA) / (_z_terr - Z_TRASERA)   # la trasera no se mueve
+    # costura con la terraza: en la franja de fuera del lado L-T
+    _bd = _a_abajo(np.array(_borde))
+    _cost_ab = LineString(_bd)
+    _lado = LineString(_a_abajo(np.array([_L, _T])))
+    _e_v = np.asarray(_sh.distance(_cost_ab, _sh.points(_v[:, 0], _v[:, 1])))
+    _fuera_LT = np.asarray(_sh.distance(_lado, _sh.points(_v[:, 0], _v[:, 1]))) < \
+        _lado.distance(_cost_ab) + 1e-6
+    _fuera_LT &= _e_v < _lado.distance(_cost_ab)
+    # la terraza copiada no es la de abajo (+-0,1): de la ranura hacia la costura
+    # la franja pasa a seguir la terraza de Meshy de abajo, y en la costura se
+    # cruza con ella en angulo (a_costura)
+    # (se aplica como desplazamiento de la cara de arriba, que baja hasta 1 mm por
+    # la pared: los vertices de las paredes no se cruzan)
+    _ws = _lado.distance(_cost_ab)
+    _Hp = alturas(trimesh.Trimesh(_v, _pieza.faces, process=False), _RES, _LIM)
+    _, (_jp, _ip) = ndimage.distance_transform_edt(~np.isfinite(_Hp), return_indices=True)
+    _Hp = _Hp[_jp, _ip]
+    _xs, _ys = _v[:, 0], _v[:, 1]
+    _g = np.where(_fuera_LT, np.clip((_ws - 0.4 - _e_v) / 0.5, 0, 1), 0.0)
+    _g = _g * _g * (3 - 2 * _g)
+    _ztop = muestrear(_Hp, _xs, _ys)
+    _f = np.clip((_v[:, 2] - (_ztop - 1.0)) / 1.0, 0, 1)     # 1 en la cara de arriba
+    _zref = _f * _v[:, 2] + (1 - _f) * _ztop                  # (asi los granitos se van)
+    _delta = COSTURA + _g * (a_costura(muestrear(HS, _xs, _ys), _xs, _ys, _e_v, guarda=False)
+                             - (_zref + COSTURA))
+    _v[:, 2] += _delta * _f
+    # media pieza abierta por X = 0; las dos mitades se cosen por esos vertices
+    # (una booleana de dos solidos que solo se tocan en un plano deja pellizcos)
+    _pieza = trimesh.intersections.slice_mesh_plane(
+        trimesh.Trimesh(_v, _pieza.faces), plane_normal=[1, 0, 0], plane_origin=[0, 0, 0],
+        cap=False)
+    _v = _pieza.vertices.copy()
+    _v[np.abs(_v[:, 0]) < 1e-6, 0] = 0.0
+    _f = _pieza.faces[~(_v[_pieza.faces][:, :, 0] == 0).all(axis=1)]   # ninguna en el plano
+    _ve = _v * [-1.0, 1, 1]
+    ROMBO = trimesh.Trimesh(np.vstack([_v, _ve]),
+                            np.vstack([_f, _f[:, ::-1] + len(_v)]), process=False)
+    ROMBO.merge_vertices()
+    assert ROMBO.is_watertight and ROMBO.is_winding_consistent, 'el rombo cosido no cierra'
+
+    def _espejo(p):
+        return p.union(Polygon([(-x, y) for x, y in p.exterior.coords])).buffer(0)
+    ROMBO_ZONA = _espejo(Polygon(_a_abajo(np.array(_zona_src.exterior.coords))))
+    # Meshy se quita en la zona menos la parte de fuera de la franja (alli se cruzan)
+    _franja_ab = Polygon([_bd[0], _bd[1], *_a_abajo(np.array([_T, _L]))])
+    _cruce = _espejo(_franja_ab.intersection(_cost_ab.buffer(RAMPA, cap_style=2)))
+    ROMBO_CORTE = ROMBO_ZONA.difference(_cruce).buffer(-COSTURA)
+    assert _lado.distance(_cost_ab) > RAMPA + 1.6, \
+        f'la franja del rombo ({_lado.distance(_cost_ab):.1f} mm) no da para la costura'
+
+    # (a) la terraza junto a la pared escalon->terraza: Meshy deja ahi un labio
+    # rugoso de 1-3 mm (lo que queda de su rampa) y alguna hondonada. Se rehace la
+    # franja entera: a la altura de la terraza buena mas cercana (lo que esta a
+    # mas de TERRAZA_LIMPIA de la pared y no se hunde respecto a su entorno) y con
+    # un canto redondo de radio CANTO_R arriba de la pared.
+    dW2 = np.asarray(_sh.distance(W2, _sh.points(HX.ravel(), HY.ravel()))).reshape(H.shape)
+    _terr = (H >= TERRAZA_MIN) & (dW2 > 0) & (dW2 < TERRAZA_ANCHO + 6)
+    _k = 4        # nivel del entorno: percentil 75 en 8 mm, en malla gruesa
+    _ref = ndimage.percentile_filter(np.where(_terr, H, -1e3)[::_k, ::_k], 75, size=21)
+    _ref = ndimage.zoom(_ref, _k, order=1)[:_n, :_n]
+    _limpio = _terr & (dW2 >= TERRAZA_LIMPIA) & (H >= _ref - TERRAZA_BAJA)
+    _, (_jl, _il) = ndimage.distance_transform_edt(~_limpio, return_indices=True)
+    T_TERRAZA = ndimage.gaussian_filter(H[_jl, _il], 3)
+    _dentro_w2 = W2.buffer(-0.05, join_style=JS, mitre_limit=8)
+    _fuera = W2.buffer(TERRAZA_ANCHO + RAMPA, join_style=JS, mitre_limit=8).intersection(
+        ESTRELLA.buffer(-1.0)).difference(ROMBO_ZONA.buffer(1.0))
+    BANDA = _fuera.difference(_dentro_w2)
+    BANDA_CORTE = _fuera.buffer(-RAMPA, join_style=JS, mitre_limit=8).difference(_dentro_w2)
+
+    def _z_terraza(x, y):
+        d = np.clip(np.asarray(_sh.distance(W2, _sh.points(x, y))), 0, CANTO_R)
+        z = muestrear(T_TERRAZA, x, y) - (
+            CANTO_R - np.sqrt(np.maximum(CANTO_R ** 2 - (CANTO_R - d) ** 2, 0)))
+        return a_costura(z, x, y, np.asarray(_sh.distance(_fuera.boundary, _sh.points(x, y))))
+    TERRAZA = campo(BANDA, Z_JUNTA, _z_terraza)
+    log(f'  terraza: {TERRAZA_ANCHO:.0f} mm junto a la pared rehechos a la altura de la '
+        f'terraza buena, canto redondo R{CANTO_R:.1f}')
+
+    # (c) el canto de fuera de las dos caras de abajo: en Meshy ondula (hasta
+    # 1,4 mm). La pared de esas caras es recta (+-0,06 mm): se ajusta su recta a
+    # Z=BARRIDO_Z0 y la franja se rehace entera, de la trasera arriba: pared plana
+    # y el canto con su perfil medio barrido a lo largo de ella, en una rejilla
+    # alineada con la cara (las curvas de nivel del canto van paralelas a los
+    # triangulos: sombreado liso). En los extremos se funde con Meshy.
+    _E0 = Polygon(max(secciones_xy(malla, BARRIDO_Z0, min_area=200), key=lambda p: p.area).exterior)
+    _pE0 = np.array(_E0.exterior.coords)
+
+    def _cara(a, b):
+        a, b = np.array(a, float), np.array(b, float)
+        t = (b - a) / np.linalg.norm(b - a)
+        nn = np.array([-t[1], t[0]])
+        if not ESTRELLA.contains(Point(*((a + b) / 2 + nn * 3))):
+            nn = -nn                                   # nn: hacia dentro
+        L = np.linalg.norm(b - a)
+        s, u = (_pE0 - a) @ t, (_pE0 - a) @ nn
+        k = (s > 2) & (s < L - 2) & (np.abs(u) < 3)
+        c1, c0 = np.polyfit(s[k], u[k], 1)             # la pared: u = c0 + c1 s
+        a2 = a + nn * c0
+        t2 = (b + nn * (c0 + c1 * L)) - a2
+        L2 = np.linalg.norm(t2)
+        t2 /= L2
+        n2 = np.array([-t2[1], t2[0]]) * np.sign(np.dot([-t2[1], t2[0]], nn))
+        a2, L2 = a2 + t2 * BARRIDO_MARGEN, L2 - 2 * BARRIDO_MARGEN   # lejos de las esquinas
+        corte = Polygon([a2 - n2 * 2, a2 + t2 * L2 - n2 * 2,
+                         a2 + t2 * L2 + n2 * BARRIDO_ANCHO, a2 + n2 * BARRIDO_ANCHO])
+        return a2, t2, n2, L2, corte.buffer(0)
+    CARAS = [_cara(*CARA_ABAJO), _cara((-CARA_ABAJO[0][0], CARA_ABAJO[0][1]),
+                                      (-CARA_ABAJO[1][0], CARA_ABAJO[1][1]))]
+    # perfil medio: altura segun la distancia hacia dentro desde la pared
+    _us, _zs = [], []
+    for a2, t2, n2, L2, _ in CARAS:
+        s = (HX - a2[0]) * t2[0] + (HY - a2[1]) * t2[1]
+        u = (HX - a2[0]) * n2[0] + (HY - a2[1]) * n2[1]
+        k = (s > 0.15 * L2) & (s < 0.85 * L2) & (u > 0) & (u < BARRIDO_ANCHO + RAMPA + 0.3)
+        _us.append(u[k]); _zs.append(H[k])
+    _us, _zs = np.concatenate(_us), np.concatenate(_zs)
+    _bins = np.arange(0, BARRIDO_ANCHO + RAMPA + 0.3, 0.1)
+    _idx = np.digitize(_us, _bins)
+    _uperf = _bins[:-1] + 0.05
+    PERFIL = np.array([np.median(_zs[_idx == i]) for i in range(1, len(_bins))])
+    PERFIL = ndimage.uniform_filter1d(np.maximum.accumulate(PERFIL), 3, mode='nearest')
+
+    def _barrido(a2, t2, n2, L2):
+        """Losa cerrada sobre una rejilla (s a lo largo de la cara, u hacia dentro)."""
+        R = RAMPA
+        ss = np.linspace(-R, L2 + R, int(np.ceil((L2 + 2 * R) / 0.5)) + 1)
+        vv = np.r_[np.arange(0, 3.0, 0.05), np.arange(3.0, BARRIDO_ANCHO + R + 1e-6, 0.25)]
+        S_, V_ = np.meshgrid(ss, vv, indexing='ij')
+        # la pared: BARRIDO_FUERA por fuera de la recta (tapa la de Meshy, que se
+        # aparta +-0,06) y, pasado el corte de los extremos, se mete hasta quedar
+        # dentro de la de Meshy: las dos paredes se cruzan en angulo, sin escalon
+        f_ext = np.clip((np.maximum(-S_, S_ - L2) - 0.3) / 0.6, 0, 1)
+        u_pared = -BARRIDO_FUERA + f_ext * (BARRIDO_FUERA + 0.5)
+        W_ = BARRIDO_ANCHO + R
+        U_ = u_pared + V_ * (W_ - u_pared) / W_
+        X_ = a2[0] + S_ * t2[0] + U_ * n2[0]
+        Y_ = a2[1] + S_ * t2[1] + U_ * n2[1]
+        w = np.clip(np.minimum(S_, L2 - S_) / BARRIDO_FUNDE, 0, 1)
+        w = w * w * (3 - 2 * w)
+        # (Meshy se muestrea por dentro de su pared: fuera, el mapa no dice nada)
+        Uc = np.maximum(U_, 0.3)
+        Zm = muestrear(HS, a2[0] + S_ * t2[0] + Uc * n2[0], a2[1] + S_ * t2[1] + Uc * n2[1])
+        Z_ = w * np.interp(U_, _uperf, PERFIL) + (1 - w) * Zm
+        e = np.minimum(np.minimum(S_ + R, L2 + R - S_), BARRIDO_ANCHO + R - U_)
+        Z_ = a_costura(Z_.ravel(), X_.ravel(), Y_.ravel(), e.ravel()).reshape(Z_.shape)
+        ns, nu = S_.shape
+        top = np.c_[X_.ravel(), Y_.ravel(), Z_.ravel()]
+        bot = np.c_[X_.ravel(), Y_.ravel(), np.full(X_.size, Z_TRASERA)]
+        idx = np.arange(ns * nu).reshape(ns, nu)
+        q = np.c_[idx[:-1, :-1].ravel(), idx[1:, :-1].ravel(), idx[1:, 1:].ravel(), idx[:-1, 1:].ravel()]
+        f_top = np.r_[q[:, [0, 1, 2]], q[:, [0, 2, 3]]]
+        f_bot = f_top[:, ::-1] + ns * nu
+        borde = np.r_[idx[:, 0], idx[-1, 1:], idx[::-1, -1][1:], idx[0, ::-1][1:-1]]
+        b1 = np.roll(borde, -1)
+        f_lado = np.r_[np.c_[borde, borde + ns * nu, b1], np.c_[b1, borde + ns * nu, b1 + ns * nu]]
+        m = trimesh.Trimesh(np.r_[top, bot], np.r_[f_top, f_bot, f_lado], process=False)
+        if m.volume < 0:
+            m.invert()
+        assert m.is_watertight and m.is_winding_consistent, 'el barrido no cierra'
+        return a_manifold(m)
+    BARRIDOS = [_barrido(a2, t2, n2, L2) for a2, t2, n2, L2, _ in CARAS]
+    _huellas = [Polygon([a2 - t2 * RAMPA - n2 * 0.3, a2 + t2 * (L2 + RAMPA) - n2 * 0.3,
+                         a2 + t2 * (L2 + RAMPA) + n2 * (BARRIDO_ANCHO + RAMPA),
+                         a2 - t2 * RAMPA + n2 * (BARRIDO_ANCHO + RAMPA)])
+                for a2, t2, n2, L2, _ in CARAS]
+    # todo lo rehecho a proposito, para verificar.py
+    REHECHO = unary_union([_fuera, ROMBO_ZONA] + _huellas).buffer(0)
+    FRANJAS = [(None, c, None) for *_, c in CARAS]
+
+    # montaje: se quita lo de Meshy en cada zona rehecha y se pone lo nuevo; el
+    # escalon entre las dos paredes es un plano exacto (relleno por debajo y
+    # cortado por encima) y la pared escalon->terraza queda vertical
+    M = a_manifold(malla)
+    M = M - a_manifold(prisma_multi(BANDA_CORTE, Z_JUNTA + 1.0, Z_FRENTE + 1.0))
+    M = M - a_manifold(prisma_multi(ROMBO_CORTE, Z_TRASERA - 1.5, Z_FRENTE + 1.0))
+    for _, qc, *_ in FRANJAS:
+        M = M - a_manifold(prisma(qc, Z_TRASERA - 1.0, Z_FRENTE + 1.0))
+    M = M + TERRAZA + a_manifold(ROMBO)
+    for B in BARRIDOS:
+        M = M + B
+    M = M + a_manifold(prisma_multi(W2, Z_JUNTA, Z_RELLENO))
+    M = M - a_manifold(prisma_multi(W2, Z_RELLENO, Z_FRENTE + 1.0))
+    MARCO = a_trimesh(M)
+    log(f'  marco: escalon plano a Z={Z_RELLENO:.2f}; rombo de abajo copiado de la punta '
+        f'lateral (dz {_dz:+.2f}); canto de las caras de abajo con perfil medio '
+        f'(de {PERFIL[0]:.2f} a {PERFIL[-1]:.2f} en {BARRIDO_ANCHO:.1f} mm)')
 else:
     Z_RELLENO, RELLENO_ANCHO = Z_CORONA, 0.0
+    REHECHO = AEX
 PIEDRA = bo('difference', [MARCO, HUECO_PIEDRA])
 PIEDRA = bo('difference', [PIEDRA, CANAL])
 PIEDRA = limpiar(bo('difference', [PIEDRA] + TALADROS))
@@ -878,7 +1096,7 @@ esc.export(os.path.join(OUT, 'montada.3mf'))
 
 with open(os.path.join(OUT, 'contornos.wkt'), 'w') as f:
     f.write(SIL_CIERVO.wkt + '\n' + POZO.wkt + '\n' + AEX.wkt + '\n'
-            + CORONA.wkt + '\n')
+            + CORONA.wkt + '\n' + REHECHO.wkt + '\n')
 np.save(os.path.join(OUT, 'cotas.npy'), np.array([
     S, Z_TRASERA, Z_SUELO, Z_CORONA, Z_JUNTA, Z_FRENTE,
     OFF_LUZ, OFF_PIEDRA, TAPA_ESP, CIERVO_RELIEVE, HOLGURA, FALDA, Z_RELLENO, RELLENO_ANCHO]))
