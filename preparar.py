@@ -848,6 +848,10 @@ elif CORONA_BORDE == 'ciudadela':
                             np.vstack([_f, _f[:, ::-1] + len(_v)]), process=False)
     ROMBO.merge_vertices()
     assert ROMBO.is_watertight and ROMBO.is_winding_consistent, 'el rombo cosido no cierra'
+    # la trasera de la punta lateral trae ranuras de Meshy en su primer mm y medio:
+    # se maciza con el contorno de mas arriba (primera capa limpia)
+    _z_ok = Z_TRASERA + 1.6
+    ROMBO = bo('union', [ROMBO, prisma_multi(xy_material(ROMBO, _z_ok), Z_TRASERA, _z_ok + 0.1)])
 
     def _espejo(p):
         return p.union(Polygon([(-x, y) for x, y in p.exterior.coords])).buffer(0)
@@ -870,8 +874,12 @@ elif CORONA_BORDE == 'ciudadela':
     _ref = ndimage.percentile_filter(np.where(_terr, H, -1e3)[::_k, ::_k], 75, size=21)
     _ref = ndimage.zoom(_ref, _k, order=1)[:_n, :_n]
     _limpio = _terr & (dW2 >= TERRAZA_LIMPIA) & (H >= _ref - TERRAZA_BAJA)
-    _, (_jl, _il) = ndimage.distance_transform_edt(~_limpio, return_indices=True)
-    T_TERRAZA = ndimage.gaussian_filter(H[_jl, _il], 3)
+    _dl, (_jl, _il) = ndimage.distance_transform_edt(~_limpio, return_indices=True)
+    # donde se extrapola (labio, hondonadas) se suaviza mas: la terraza buena mas
+    # cercana cambia de golpe de un lado a otro y dejaria muescas
+    _a = np.clip(_dl * _RES / 1.0, 0, 1)
+    T_TERRAZA = (1 - _a) * ndimage.gaussian_filter(H[_jl, _il], 3) + \
+        _a * ndimage.gaussian_filter(H[_jl, _il], 15)
     _dentro_w2 = W2.buffer(-0.05, join_style=JS, mitre_limit=8)
     _fuera = W2.buffer(TERRAZA_ANCHO + RAMPA, join_style=JS, mitre_limit=8).intersection(
         ESTRELLA.buffer(-1.0)).difference(ROMBO_ZONA.buffer(1.0))
@@ -1001,7 +1009,7 @@ else:
 PIEDRA = bo('difference', [MARCO, HUECO_PIEDRA])
 PIEDRA = bo('difference', [PIEDRA, CANAL])
 PIEDRA = limpiar(bo('difference', [PIEDRA] + TALADROS))
-PIEDRA = pulir(PIEDRA, 'piedra')
+PIEDRA = pulir(PIEDRA, 'piedra', tol=0.005)   # (5 micras: junta los racimos de vertices de las costuras)
 
 
 # ----------------------------------------------------------------------------

@@ -205,7 +205,23 @@ recalcula desde el OBJ); `preparar.py` lo usa con `CORONA_BORDE = 'ciudadela'`
   (`AEX.buffer(RELLENO_ANCHO + 0,3)` y la puerta de abajo); el pozo se informa
   pero no se exige (está rediseñado).
 
-`verificar.py`: **49/49**. Piedra 752 cm³, luz 88 cm³, tapa 136 cm³, corona
+Segunda ronda (Sergi, 24-09: «subir la altura de lo nuevo y un canto redondeado»):
+- (a) Terraza junto a W2: nivel = terraza buena más cercana (a más de
+  `TERRAZA_LIMPIA` de la pared y sin hundirse respecto a su entorno), suavizado
+  donde se extrapola; canto redondo `CANTO_R` = 1 mm.
+- (b) Rombo de abajo: malla real de media punta lateral (`ROMBO_LAT` ->
+  `ROMBO_ABAJO`, afín), cosida por X = 0 (sin booleana: pellizcaba), trasera
+  macizada 1,6 mm (ranuras de Meshy en la primera capa).
+- (c) Caras de abajo: pared recta ajustada y canto con el perfil medio, en rejilla
+  alineada con la cara (un campo de alturas daba dientes en el canto empinado).
+- Costuras: nunca superficie contra superficie de refilón (pellizcos) ni escalón
+  (se ve como una línea). `a_costura()`: lo nuevo pasa de `COSTURA` por encima a
+  2x por debajo en `RAMPA` mm y cruza a Meshy en ángulo.
+- `contornos.wkt` lleva una 5ª línea, REHECHO; `verificar.py` compara fuera de
+  ella y revisa láminas/rendijas en la piedra rehecha (descontando las ranuras
+  del diseño: las de Meshy, las del rombo copiado y las esquinas del canto).
+
+`verificar.py`: **50/50**. Piedra 752 cm³, luz 88 cm³, tapa 136 cm³, corona
 3 885 mm², caja del LED 39 cm² × 34 mm.
 
 Queda de Meshy sin tocar:

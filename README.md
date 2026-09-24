@@ -31,9 +31,13 @@ Simétrico respecto a X = 0, de fuera hacia dentro:
 - Puntas laterales con las dos caras iguales (29,8 mm).
 - **Pozo**: pentágono simétrico con los lados de abajo verticales, para
   enmarcar al ciervo; el ciervo va **4,9 mm a la derecha** para quedar centrado.
-- La terraza de fuera del escalón (8 mm) se alisa a su nivel; el valle de la
-  punta de abajo es copia del valle lateral girado, así su rombo queda delante
-  como los demás.
+- Contorno interior: la franja de terraza junto a la pared (8 mm) se rehace a la
+  altura de la terraza buena, con un **canto redondo de 1 mm** arriba de la pared.
+- Rombo de la punta de abajo: **copia de la malla del rombo lateral**, llevada a
+  la punta de abajo y reflejada (simétrico).
+- Canto de fuera de las dos caras de abajo (en Meshy ondulaba): perfil medio
+  barrido recto a lo largo de la cara.
+- Todas las costuras con Meshy se cruzan en ángulo suave: sin escalón.
 
 ## Las tres piezas
 
@@ -110,18 +114,18 @@ Comprobado moviendo cada pieza por **todo el recorrido** de montaje (1, 2, 4, 8,
 ```
 preparar.py      genera las tres piezas desde el OBJ (parámetros arriba del todo)
 ciudadela.py     trazado del nicho (W2, escalón, pozo), fijado como diseño
-verificar.py     49 comprobaciones + renders
+verificar.py     50 comprobaciones + renders
 geo.py           secciones horizontales en coordenadas mundo
 render.py        rasterizador para los renders
 1_piedra / 2_luz / 3_tapa   .stl y .ply
 montada.3mf      las tres en su sitio, para mirarlo antes de laminar
 ```
 
-## Comprobado (49/49)
+## Comprobado (50/50)
 
 - Las tres piezas cerradas, de un solo trozo, sin triángulos degenerados ni
   pellizcos (también los .stl), y sin lengüetas o rendijas de menos de 0,8 mm
-  en lo construido.
+  en lo construido (en la piedra rehecha solo quedan las ranuras del diseño).
 - Solape entre piezas: 0,00 mm³.
 - Silueta exterior intacta fuera de lo rehecho (0,019 mm); marco visto: 0 de
   1 380 puntos desviados más de 0,3 mm fuera de lo rehecho a propósito.

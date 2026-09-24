@@ -125,8 +125,35 @@ for n, pol in (('POZO', POZO), ('borde de la corona', AEX)):
 for n, m, zona, paso in (('tapa', T, None, 0.25),
                          ('luz fuera del ciervo', L, AEX.buffer(1).difference(POZO.buffer(-0.3))
                           .difference(SIL_CIERVO.buffer(1.5)), 0.25),
-                         ('piedra rehecha', P, REHECHO.buffer(0.5).difference(AEX.buffer(0.5)), 0.5)):
+                         ('piedra rehecha', P, REHECHO.buffer(0.5).difference(AEX.buffer(0.5)), 0.25)):
     e = estrechos(m, zona=zona, paso=paso)
+    if n == 'piedra rehecha':
+        # las ranuras de Meshy son de ~0,6 mm y salen como rendijas: no cuentan
+        # las que estan en el original (mismo corte, a < 7 mm: son lineas largas),
+        # las ranuras del rombo de abajo (copia de las del lateral) ni las
+        # esquinas del canto redondo (vertices de la pared escalon->terraza)
+        _orig = trimesh.load(OBJ, process=False)
+        _orig.apply_scale(S)
+        _orig = trimesh.intersections.slice_mesh_plane(_orig, [0, 0, 1], [0, 0, Z_TRASERA], cap=True)
+        eo = [(zz, np.array(q.centroid.coords[0])) for zz, _, q in estrechos(_orig, zona=zona, paso=paso)]
+        esquinas = np.array(AEX.buffer(5.0, join_style=2, mitre_limit=8).exterior.coords)
+        rombo_ab = Polygon([(-11, -86), (11, -86), (11, -69), (-11, -69)])
+
+        def _explicado(zz, q):
+            c = np.array(q.centroid.coords[0])
+            if any(abs(z2 - zz) < 0.6 and np.linalg.norm(c - o) < 7 for z2, o in eo):
+                return True
+            if zz > Z_RELLENO + 4 and rombo_ab.contains(q.centroid):
+                return True
+            return np.min(np.linalg.norm(esquinas - c, axis=1)) < 2.0
+        log(f'  piedra rehecha: {len(e)} ranuras/esquinas finas, '
+            f'{sum(_explicado(zz, q) for zz, _, q in e)} de ellas del diseno (Meshy, rombo copiado, '
+            f'esquinas del canto)')
+        e = [x for x in e if not _explicado(x[0], x[2])]
+        # y una lamina o rendija de verdad sigue en el corte de al lado; lo que sale
+        # en un solo corte es el plano de corte rozando una terraza casi horizontal
+        e = [x for x in e if any(abs(abs(y[0] - x[0]) - paso) < 1e-6 and
+                                 y[2].distance(x[2]) < 0.5 for y in e)]
     sitios = sorted({(round(q.centroid.x), round(q.centroid.y)) for _, _, q in e})
     chk(not e, f'{n}: {len(e)} lenguetas o rendijas de menos de 0,8 mm'
         + (f' en {sitios[:6]}' if e else ''))
