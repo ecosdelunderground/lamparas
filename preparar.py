@@ -122,9 +122,10 @@ TAPA_ESPIGO_W = 2.0
 CAJA_MIN      = 1.5     # la caja del LED no tiene zonas mas estrechas que esto (mm):
                         # donde tubo y falda quedarian casi pegados, se macizan
 ANCHO_MIN     = 1.2     # espigo y agujero del pedestal: nada mas estrecho que esto
-CAJA_MAX      = 14.0    # donde la caja del LED es mas ancha que esto (las puntas de
-                        # los baluartes) su centro se deja macizo: la corona no tiene
-                        # que puentear mas de esto al imprimirse
+PASILLO       = 5.0     # pasillo de luz alrededor de todo el tubo, por detras de la
+                        # corona (Sergi: toda la pieza es un corredor de luz, sin
+                        # macizos que hagan sombra). Donde no cabe bajo la corona, la
+                        # falda se sale de ella por detras, escondida en la piedra
 
 TORNILLO_D    = 2.7     # taladro para M3 autorroscante
 TORNILLO_H    = 8.0
@@ -603,7 +604,13 @@ log(f'  CORONA: {len(_ext.exterior.coords)} vertices -> '
 
 OFF_LUZ = PARED
 OFF_PIEDRA = PARED + HOLGURA
-P_TAPA = mayor(AEX.buffer(TORNILLO_R + TAPA_VUELO, join_style=JS, mitre_limit=8)
+# contorno de la pieza de luz por detras de la corona: la corona y, alrededor
+# del tubo, el pasillo de luz con su falda
+LUZ_EXT = mayor(unary_union([AEX, off(POZO, OFF_LUZ + PASILLO + FALDA)]))
+log(f'  pasillo de luz de {PASILLO:.0f} mm: la falda sale hasta '
+    f'{max(AEX.exterior.distance(Point(c)) for c in LUZ_EXT.exterior.coords):.1f} mm '
+    f'fuera de la corona, por detras')
+P_TAPA = mayor(LUZ_EXT.buffer(TORNILLO_R + TAPA_VUELO, join_style=JS, mitre_limit=8)
                .intersection(ESTRELLA.buffer(-4.0, join_style=1)))
 log(f'  tapa: bbox {np.round(P_TAPA.bounds, 1)}  margen al borde '
     f'{ESTRELLA.exterior.distance(P_TAPA):.1f} mm')
@@ -670,14 +677,14 @@ log(f'  relieve: reculado {_atras:.1f} mm, Z {Z_SUELO:.2f}..'
 # ----------------------------------------------------------------------------
 log('construyendo los cortes...')
 HUECO_PIEDRA = bo('union', [
-    prisma_multi(AEX.buffer(HOLGURA / 2, join_style=JS, mitre_limit=8),
+    prisma_multi(LUZ_EXT.buffer(HOLGURA / 2, join_style=JS, mitre_limit=8),
                  Z_TRASERA - 1, Z_JUNTA),                     # caja de la luz
     prisma_multi(CORONA.buffer(HOLGURA / 2, join_style=JS, mitre_limit=8),
                  Z_JUNTA - HOLGURA, Z_FRENTE + 1),            # rebaje de la corona
     prisma_multi(POZO, Z_JUNTA - HOLGURA, Z_FRENTE + 1),      # boca del pozo
 ])
 
-y_alto = AEX.bounds[1] + 4.0
+y_alto = LUZ_EXT.bounds[1] + 4.0
 y_bajo = malla.bounds[0][1] - 1
 CANAL = bo('union', [
     prisma(sbox(-CABLE_ANCHO / 2, y_bajo, CABLE_ANCHO / 2, y_alto),
@@ -687,7 +694,7 @@ CANAL = bo('union', [
 ])
 
 cx, cy = POZO.centroid.x, POZO.centroid.y
-anillo_t = off(AEX, TORNILLO_R)
+anillo_t = off(LUZ_EXT, TORNILLO_R)
 TORNILLOS = []
 for k in range(N_TORNILLOS):
     a = np.radians(90 + 360.0 / N_TORNILLOS * k)
@@ -697,7 +704,7 @@ for k in range(N_TORNILLOS):
     TORNILLOS.append((pt.x, pt.y))
 for x, y in TORNILLOS:
     assert P_TAPA.contains(Point(x, y).buffer(TORNILLO_CAB / 2 + 0.8)), 'tornillo fuera'
-    assert not AEX.intersects(Point(x, y).buffer(TORNILLO_D / 2 + 1.0)), 'tornillo en el hueco'
+    assert not LUZ_EXT.intersects(Point(x, y).buffer(TORNILLO_D / 2 + 1.0)), 'tornillo en el hueco'
     assert Point(x, y).distance(sbox(-CABLE_ANCHO, -1e4, CABLE_ANCHO, y_alto)) > 3
 log('  tornillos en ' + ', '.join(f'({x:.0f},{y:.0f})' for x, y in TORNILLOS))
 TALADROS = []
@@ -1016,19 +1023,20 @@ PIEDRA = pulir(PIEDRA, 'piedra', tol=0.005)   # (5 micras: junta los racimos de 
 # 6. LUZ: corona + escalon interno + falda + ciervo, todo de una pieza
 # ----------------------------------------------------------------------------
 log('pieza de luz...')
-# caja del LED: el hueco entre tubo y falda, sin zonas estrechas. Donde los dos
-# quedarian casi pegados (rendija de menos de CAJA_MIN) se maciza: tubo y falda
-# salen de un solo prisma sin ranuras.
-CAJA = abrir(AEX.buffer(-FALDA, join_style=JS, mitre_limit=8)
+# caja del LED = pasillo de luz: todo el hueco entre tubo y falda, una sola
+# pieza alrededor del tubo y sin macizos (sin zonas de menos de CAJA_MIN)
+CAJA = abrir(LUZ_EXT.buffer(-FALDA, join_style=JS, mitre_limit=8)
              .difference(off(POZO, OFF_LUZ)), CAJA_MIN)
-_nucleo = abrir(CAJA.buffer(-CAJA_MAX / 2 + 1.0, join_style=1), 2.0)
-if not _nucleo.is_empty:
-    CAJA = abrir(CAJA.difference(_nucleo), CAJA_MIN)
-    log(f'  caja del LED: nucleo macizo de {_nucleo.area:.0f} mm2 en las puntas (puente < {CAJA_MAX:.0f} mm)')
+assert CAJA.geom_type == 'Polygon', 'el pasillo de luz no da la vuelta entera'
+# bajo la corona el pasillo llega hasta ella (la luz la atraviesa solo a ella);
+# por fuera de la corona se tapa con 1,5 mm, escondido en la piedra
+_bajo = CAJA.intersection(AEX.buffer(0.05, join_style=JS, mitre_limit=8))
+_fuera_c = CAJA.difference(AEX)
 LUZ = bo('union', [
-    prisma_multi(CORONA, Z_JUNTA, Z_CORONA),                                # corona
-    bo('difference', [prisma_multi(AEX.difference(POZO), Z_TRASERA, Z_JUNTA),  # tubo + falda
-                      prisma_multi(CAJA, Z_TRASERA - 1, Z_JUNTA)]),
+    prisma_multi(CORONA, Z_JUNTA, Z_CORONA),                                    # corona
+    bo('difference', [prisma_multi(LUZ_EXT.difference(POZO), Z_TRASERA, Z_JUNTA),  # tubo + falda
+                      prisma_multi(_bajo, Z_TRASERA - 1, Z_JUNTA)]
+       + ([prisma_multi(_fuera_c, Z_TRASERA - 1, Z_JUNTA - 1.5)] if _fuera_c.area > 1 else [])),
     CIERVO_REL,
 ])
 # hueco del ciervo: erosion 3D; la boca trasera lo une con el agujero del pedestal
@@ -1047,7 +1055,7 @@ LUZ = pulir(LUZ, 'luz', tol=0.01)
 # 7. TAPA: placa + el fondo del nicho
 # ----------------------------------------------------------------------------
 log('tapa...')
-_e0 = AEX.buffer(-FALDA - HOLGURA, join_style=JS, mitre_limit=8)
+_e0 = LUZ_EXT.buffer(-FALDA - HOLGURA, join_style=JS, mitre_limit=8)
 espigo = _e0.difference(_e0.buffer(-TAPA_ESPIGO_W, join_style=JS, mitre_limit=8))
 espigo = abrir(espigo.intersection(CAJA.buffer(-HOLGURA, join_style=JS, mitre_limit=8)),
                ANCHO_MIN)

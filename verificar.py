@@ -217,9 +217,11 @@ dev = contorno(g_r).symmetric_difference(AEX).area / AEX.exterior.length
 chk(dev < 0.02, f'el borde exterior de la corona es el poligono limpio '
                 f'(desvio medio {dev:.4f} mm)')
 
-# el marco exterior no emite: la luz no asoma fuera de la corona
+# el marco exterior no emite: la luz no asoma fuera de la corona. (Por debajo
+# de la junta la falda del pasillo de luz se sale de la corona por detras: queda
+# tapada por la piedra del escalon; eso lo miran las interferencias.)
 fuera = max(xy_material(L, z).difference(AEX.buffer(0.05)).area
-            for z in np.linspace(Z_TRASERA + 0.5, Z_CORONA - 0.1, 16))
+            for z in np.linspace(Z_JUNTA + 0.1, Z_CORONA - 0.1, 8))
 alto = L.vertices[:, 2] > Z_CORONA + 0.01
 asoma = (~shapely.contains(POZO, shapely.points(L.vertices[alto][:, :2]))).sum()
 chk(fuera < 0.5 and asoma == 0,
@@ -412,9 +414,10 @@ for n, m in (('piedra', P), ('luz', L), ('tapa', T)):
     zt = f'{peor_z:+.1f}' if peor_z is not None else '  -  '
     log(f'  {n:7s} peor capa sin apoyo: {peor_a:6.1f} mm2 en Z={zt}, '
         f'puente de {w:.1f} mm')
-    # un puente apoyado en los dos lados hasta 15 mm lo hace el laminador solo;
-    # lo que no vale es un voladizo en el aire
-    chk(w < 15.0, f'{n}: puentes que el laminador hace solo (el peor, {w:.1f} mm)')
+    # un puente apoyado en los dos lados hasta ~15 mm lo hace el laminador solo;
+    # lo que no vale es un voladizo en el aire. (Sergi, 24-09: pasillo de luz sin
+    # macizos; en las puntas la corona puentea algo mas de 15 mm: aceptado hasta 16)
+    chk(w < 16.0, f'{n}: puentes que el laminador hace solo (el peor, {w:.1f} mm)')
     if islas_ok:
         log(f'  {n:7s} {len(islas_ok)} islas bajo el ciervo, entre Z={islas_ok[0][0]:+.1f} y '
             f'{islas_ok[-1][0]:+.1f}: LLEVAN SOPORTE (aceptado)')

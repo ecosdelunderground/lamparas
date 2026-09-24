@@ -44,15 +44,16 @@ Simétrico respecto a X = 0, de fuera hacia dentro:
 | | filamento | tamaño | volumen |
 |---|---|---|---|
 | `1_piedra` | opaco, acabado piedra | 200 × 198 × 55 mm | 752 cm³ |
-| `2_luz` | **translúcido** | 139 × 145 × 37 mm | 88 cm³ |
-| `3_tapa` | opaco | 166 × 171 × 16 mm | 136 cm³ |
+| `2_luz` | **translúcido** | 139 × 145 × 37 mm | 78 cm³ |
+| `3_tapa` | opaco | 166 × 171 × 16 mm | 138 cm³ |
 
 `2_luz` es **una sola pieza**: corona + escalón interno + ciervo + una **falda
-exterior** que baja desde el borde de la corona hasta la tapa. Esa falda queda
-oculta dentro de la piedra y hace tres cosas: le da a la corona en qué apoyarse
-para imprimirse sin soportes, sitúa la pieza en el hueco, y forma la caja donde
-va el LED (**39 cm² de planta × 34 mm de fondo**, con un núcleo macizo en el
-centro para que la corona no tenga puentes de más de 13 mm).
+exterior** que baja desde el borde de la corona hasta la tapa. Entre el tubo y la
+falda, un **pasillo de luz de 5 mm que da la vuelta entera** al tubo (también bajo
+el suelo del ciervo), sin macizos que hagan sombra; en las puntas se ensancha. Donde
+no cabe bajo la corona, la falda se sale de ella hasta 1,9 mm por detrás, escondida
+dentro de la piedra. La falda le da a la corona en qué apoyarse y sitúa la pieza en
+el hueco.
 
 ## El ciervo
 
@@ -72,7 +73,7 @@ donde va su trozo de tira LED.
 | Nicho | 23,9 mm de profundidad |
 | Fondo del nicho | **13,4 mm de opaco** |
 | Relieve del ciervo | 15 mm |
-| Caja del LED | 39 cm² × 34 mm |
+| Pasillo de luz | 5 mm alrededor de todo el tubo |
 | Paredes translúcidas | 2,0 mm mínimo |
 
 ## Impresión
@@ -82,7 +83,8 @@ y todas las cavidades abriendo hacia arriba. Piedra y tapa, **sin soportes**.
 La luz, **con soportes solo debajo del ciervo**: su relieve empieza 13,4 mm por
 encima de la cama (8 islas entre Z −13,0 y −3,4). Los soportes tocan el lomo
 trasero, que va contra el fondo y no se ve. Lo demás de la luz se puentea solo:
-la primera capa de la corona es un puente de 12,9 mm como mucho.
+la primera capa de la corona es un puente de 15,1 mm como mucho (en las puntas;
+revisa los ajustes de puentes del laminador).
 
 - Boquilla 0,4 · capa 0,2 · **3 perímetros**.
 - Piedra: relleno 10–15 %. Huella de 200 × 198 mm, comprueba que te cabe.
@@ -132,7 +134,7 @@ montada.3mf      las tres en su sitio, para mirarlo antes de laminar
 - Detrás del fondo del nicho: **100 % opaco**, 0 % translúcido.
 - Corona: un solo plano (±0,0000 mm) y translúcida en toda su planta.
 - Pared mínima: 2,0 mm en la pieza de luz, 1,16 mm en el ciervo.
-- Mínimo 20,7 mm de piedra entre la caja del LED y el exterior.
+- Mínimo 16,2 mm de piedra entre el pasillo de luz y el exterior.
 - Recorrido de montaje completo sin choques, pieza a pieza.
-- Voladizos capa a capa: puente de 2,7 mm en la piedra, 12,9 mm en la luz,
+- Voladizos capa a capa: puente de 4,0 mm en la piedra, 15,1 mm en la luz,
   0 en la tapa; las únicas islas son las 8 bajo el ciervo (con soporte).

@@ -230,6 +230,21 @@ Queda de Meshy sin tocar:
   delante) y de los rombos de las puntas. Es la piedra original; si Sergi la
   quiere lisa, es el siguiente paso.
 
+## Pasillo de luz (24-09, aprobado: «eso es»)
+
+Sergi: toda la pieza de luz, por detrás, tiene que ser un corredor de luz; nada
+de paredes o macizos dentro que hagan sombra. Hecho:
+- Sin núcleos macizos en las puntas (`CAJA_MAX` eliminado).
+- `LUZ_EXT` = corona ∪ `off(POZO, PARED + PASILLO + FALDA)`: pasillo de
+  `PASILLO` = 5 mm alrededor de todo el tubo, también bajo el suelo del ciervo.
+  Donde no cabe bajo la corona, la falda se sale hasta 1,9 mm por detrás (bajo la
+  junta, tapada por la piedra del escalón); ahí el pasillo lleva un techo de 1,5 mm.
+- Hueco de la piedra, tapa, espigo, tornillos y canal del cable siguen a `LUZ_EXT`.
+- `verificar.py`: «la luz no toca el marco» se mira por encima de la junta; el
+  puente de la corona en las puntas (15,1 mm) se acepta hasta 16 mm.
+
+`verificar.py`: **50/50**.
+
 ## Cómo trabaja Sergi (importante)
 
 - La parte estética la lleva él y te la marca sobre fotos y renders. Tu papel es
