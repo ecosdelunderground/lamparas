@@ -13,7 +13,7 @@ import os
 import numpy as np
 import trimesh
 import shapely
-from shapely.geometry import Polygon, Point
+from shapely.geometry import Polygon, Point, box
 from shapely.ops import unary_union
 from shapely import wkt as _wkt
 from scipy.spatial import cKDTree
@@ -247,9 +247,12 @@ else:
         if a.is_empty or bb.is_empty:
             continue
         ca, cb = contorno(a), contorno(bb)
-        dif = ca.symmetric_difference(cb).difference(AEX.buffer(0.5))
+        # fuera de la corona y de lo rehecho a proposito (escalon, terraza junto
+        # a el, valle de abajo)
+        dif = ca.symmetric_difference(cb).difference(AEX.buffer(RELLENO_ANCHO + 0.3)).difference(
+            box(-12.5, -200, 12.5, -71.5))
         peor_ext = max(peor_ext, dif.area / ca.length)
-    chk(peor_ext < 0.05, f'silueta exterior intacta fuera de la corona ({peor_ext:.3f} mm)')
+    chk(peor_ext < 0.05, f'silueta exterior intacta fuera de lo rehecho ({peor_ext:.3f} mm)')
 
     # superficie VISTA del original: fuera de la corona tiene que seguir igual
     # (0,3 mm); dentro, el pozo y la corona se han enderezado a proposito
@@ -259,27 +262,21 @@ else:
     xy = shapely.points(sup[:, :2])
     vista = (~shapely.contains(SIL_CIERVO.buffer(0.6), xy)) & (sup[:, 2] > Z_TRASERA + 3.5)
     dentro = shapely.contains(AEX.buffer(0.3), xy)
-    # la franja del escalon allanada (por fuera de la corona, hasta Z_RELLENO)
-    # se ha subido a proposito: ahi se admite hasta lo que se relleno
-    allanado = shapely.contains(AEX.buffer(RELLENO_ANCHO + 0.3), xy) & (sup[:, 2] < Z_RELLENO + 0.3)
-    mal_m = vista & ~dentro & ~allanado & (dd > 0.3)
-    log(f'  cara del escalon allanada a Z={Z_RELLENO:.2f}: {(vista & ~dentro & allanado).sum()} puntos, '
-        f'subidos hasta {dd[vista & ~dentro & allanado].max() if (vista & ~dentro & allanado).any() else 0:.2f} mm')
-    # dentro de AEX, por encima de la junta: la corona (plano) y la pared
-    # vertical que sustituye a la rampa de Meshy hasta el escalon, y el marco
-    # que quita la falda (opcion B): rehecho a proposito. Por debajo de la
-    # junta, las paredes del pozo enderezadas: esas si se comparan.
-    b_ok = vista & dentro & (sup[:, 2] > Z_JUNTA)
-    pz = vista & dentro & ~b_ok
-    mal_c = pz & (dd > 1.2)
-    log(f'  marco: {mal_m.sum()} de {(vista & ~dentro).sum()} puntos se apartan > 0,3 mm')
-    log(f'  corona, pared vertical hasta el escalon y falda (rehechos): {(b_ok & (dd > 1.2)).sum()} puntos')
+    # rehecho a proposito (trazado de la Ciudadela, 24-09): el escalon y la
+    # franja de terraza por fuera de el (RELLENO_ANCHO mm desde la corona) y el
+    # valle de abajo, que copia el relieve del valle lateral
+    rehecho = shapely.contains(AEX.buffer(RELLENO_ANCHO + 0.3), xy) | \
+        shapely.contains(box(-12.5, -200, 12.5, -71.5), xy)
+    mal_m = vista & ~dentro & ~rehecho & (dd > 0.3)
+    log(f'  marco: {mal_m.sum()} de {(vista & ~dentro & ~rehecho).sum()} puntos se apartan > 0,3 mm')
+    log(f'  rehecho a proposito (escalon, terraza junto a el, valle de abajo): '
+        f'{(vista & ~dentro & rehecho).sum()} puntos, hasta {dd[vista & ~dentro & rehecho].max():.1f} mm')
+    pz = vista & dentro & (sup[:, 2] < Z_JUNTA)
     if pz.any():
-        log(f'  pozo y corona: {mal_c.sum()} de {pz.sum()} puntos se apartan > 1,2 mm; '
-            f'percentiles 50/90/99/max: {np.round(np.percentile(dd[pz], [50, 90, 99, 100]), 2).tolist()} mm')
-    chk(mal_m.sum() / max((vista & ~dentro).sum(), 1) < 0.005, 'el marco visto queda intacto')
-    chk(mal_c.sum() / max(pz.sum(), 1) < 0.01,
-        'el pozo y la corona se apartan del original como mucho la tolerancia de enderezado')
+        log(f'  pozo: redisenado (pentagono de Sergi); sus paredes se apartan del pozo de Meshy '
+            f'mediana {np.median(dd[pz]):.2f}, max {dd[pz].max():.2f} mm')
+    chk(mal_m.sum() / max((vista & ~dentro & ~rehecho).sum(), 1) < 0.005,
+        'el marco visto queda intacto fuera de lo rehecho')
 
 log('')
 log('5. HOLGURAS Y RECORRIDO DE MONTAJE')

@@ -177,6 +177,43 @@ Hecho:
 
 Queda de Meshy sin tocar: la pata delantera modelada como una tabla plana.
 
+## Rediseño Ciudadela (24-09, aprobado por Sergi: «Ahora SÍ»)
+
+El nicho ya no sigue las paredes de Meshy: se traza según la Ciudadela de Jaca
+(el logo de su web), como interpretación artística pero simétrica y con ángulos
+coherentes. Todo el trazado está en `ciudadela.py`, fijado como diseño (no se
+recalcula desde el OBJ); `preparar.py` lo usa con `CORONA_BORDE = 'ciudadela'`
+(los modos 'dentro', 'fuera' y 'canto' siguen ahí para comparar).
+
+- `W2` (escalón → terraza): cada cara de baluarte a **17 mm** de la silueta
+  simetrizada; cortinas con orejones; entrantes a **100°**; puntas laterales con
+  sus dos caras iguales (29,8 mm).
+- `AEX` (borde de la corona) = W2 metido **5 mm** (escalón constante). En la
+  puerta de abajo no hay escalón por arriba.
+- `POZO`: pentágono simétrico dibujado por Sergi, lados de abajo verticales.
+  El ciervo se aísla con el pozo de Meshy (`POZO_MESHY`) y luego se desplaza
+  `CIERVO_DX = 4,9` mm a la derecha para quedar centrado.
+- Piedra: el escalón es un prisma plano a `Z_RELLENO = 21,34`; la terraza de
+  8 mm por fuera se alisa con un campo de alturas (nivel del píxel de terraza
+  más cercano, filtro de mediana); el valle de la punta de abajo es copia del
+  valle lateral derecho girada 73° (+0,22 mm), aplicada solo donde sube, para
+  que su rombo quede delante como los demás.
+- Luz: la caja del LED lleva un núcleo macizo en el centro (54 mm²) para que el
+  puente de la corona no pase de 12,9 mm.
+- `cotas.npy` tiene 14 valores (añade `Z_RELLENO` y `RELLENO_ANCHO = 13`).
+- `verificar.py`: la silueta y el marco se comparan fuera de lo rehecho
+  (`AEX.buffer(RELLENO_ANCHO + 0,3)` y la puerta de abajo); el pozo se informa
+  pero no se exige (está rediseñado).
+
+`verificar.py`: **49/49**. Piedra 752 cm³, luz 88 cm³, tapa 136 cm³, corona
+3 885 mm², caja del LED 39 cm² × 34 mm.
+
+Queda de Meshy sin tocar:
+- la pata delantera modelada como una tabla plana;
+- la textura de piedra de las paredes del marco (de la terraza a la cara de
+  delante) y de los rombos de las puntas. Es la piedra original; si Sergi la
+  quiere lisa, es el siguiente paso.
+
 ## Cómo trabaja Sergi (importante)
 
 - La parte estética la lleva él y te la marca sobre fotos y renders. Tu papel es

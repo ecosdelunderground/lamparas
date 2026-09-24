@@ -28,6 +28,7 @@ import manifold3d
 from shapely.geometry import Polygon, LineString, Point, box as sbox
 from shapely.ops import unary_union, polygonize
 from geo import xy_material
+import ciudadela
 
 # ----------------------------------------------------------------------------
 # PARAMETROS
@@ -50,7 +51,19 @@ TOL_CORONA    = 1.2
 # (deja una tira de piedra a la altura de la corona); 'fuera' = hasta la pared
 # del escalon (la corona llega a la pared; el corte entra 0-2*TOL_FUERA en ella
 # y, al cruzar en rasante la pared texturada de Meshy, deja costura en sierra)
-CORONA_BORDE  = 'canto'
+CORONA_BORDE  = 'ciudadela'
+# 'ciudadela' = trazado acordado con Sergi (ciudadela.py): pozo, pared corona->
+# escalon y pared escalon->terraza simetricos y coherentes con la silueta.
+# ('dentro', 'fuera' y 'canto' se conservan: son los intentos anteriores.)
+TERRAZA_ANCHO = 8.0     # por fuera de la pared escalon->terraza se rellena hasta la
+                        # terraza en esta franja (entierra la rampa de Meshy y lo
+                        # que queda del trazado viejo)
+TERRAZA_MIN   = 25.8    # lo que esta por encima de esto en el marco es terraza
+VALLE_ABAJO   = (0.0, -81.15)   # centro de la muesca del valle de abajo (silueta)
+VALLE_LADO    = (72.1, -30.0)   # centro de la muesca del valle lateral derecho
+VALLE_ANCHO   = 12.0    # el valle de abajo que se rehace: |x| < esto ...
+VALLE_TECHO   = -72.0   # ... y por debajo de esta y
+VALLE_MARGEN  = 0.15    # solo se rellena donde la copia sube mas que esto
 TOL_FUERA     = 0.6
 # 'canto' = por el canto de arriba de la pared corona->escalon: el rebaje se
 # lleva la rampa de Meshy entera y deja una pared vertical cuyo canto corta la
@@ -91,6 +104,9 @@ TAPA_ESPIGO_W = 2.0
 CAJA_MIN      = 1.5     # la caja del LED no tiene zonas mas estrechas que esto (mm):
                         # donde tubo y falda quedarian casi pegados, se macizan
 ANCHO_MIN     = 1.2     # espigo y agujero del pedestal: nada mas estrecho que esto
+CAJA_MAX      = 14.0    # donde la caja del LED es mas ancha que esto (las puntas de
+                        # los baluartes) su centro se deja macizo: la corona no tiene
+                        # que puentear mas de esto al imprimirse
 
 TORNILLO_D    = 2.7     # taladro para M3 autorroscante
 TORNILLO_H    = 8.0
@@ -263,7 +279,11 @@ def sanear(mesh, corta=0.01, max_iter=40):
       condicion de enlace). La superficie se mueve menos de `corta`;
     - aguja (el tercer vertice cae sobre el lado largo), o si el colapso no se
       puede: se voltea el lado largo. La superficie se mueve menos que la
-      altura de la aguja (< 0,1 micras)."""
+      altura de la aguja (< 0,1 micras);
+    - si nada de eso se puede y el lado corto mide < 0,1 mm, se colapsa solo si
+      el otro extremo esta en el plano de todas las caras que se mueven (zona
+      plana o a lo largo de una arista), a menos de 0,02 mm: la superficie no
+      cambia de forma apreciable (una capa son 0,2 mm)."""
     V = np.asarray(mesh.vertices, float).copy()
     F = np.asarray(mesh.faces).copy()
     for _ in range(max_iter):
@@ -282,7 +302,7 @@ def sanear(mesh, corta=0.01, max_iter=40):
             vecinos.setdefault(b, set()).add(a)
         tocadas, borrar, hechos = set(), set(), 0
 
-        def colapsar(f):
+        def colapsar(f, solo_plano=False):
             k = int(np.argmin(ls[f]))
             a, b = F[f][k], F[f][(k + 1) % 3]
             g = mapa.get((b, a))
@@ -294,6 +314,16 @@ def sanear(mesh, corta=0.01, max_iter=40):
             caras_b = set(np.where((F == b).any(1))[0].tolist())
             if tocadas & caras_b:
                 return False
+            if solo_plano:
+                # b solo puede deslizarse hasta a si a esta en el plano de cada
+                # cara de b (zona plana o a lo largo de una arista): la
+                # geometria no cambia
+                cb = [c_ for c_ in caras_b if c_ not in (f, g)]
+                tv = V[F[cb]]
+                nv = np.cross(tv[:, 1] - tv[:, 0], tv[:, 2] - tv[:, 0])
+                nv = nv / np.maximum(np.linalg.norm(nv, axis=1)[:, None], 1e-12)
+                if np.abs(((V[a] - tv[:, 0]) * nv).sum(1)).max() > 0.02:
+                    return False
             F[F == b] = a
             borrar.update((f, g))
             tocadas.update(caras_b | {f, g})
@@ -320,6 +350,8 @@ def sanear(mesh, corta=0.01, max_iter=40):
                 ok = colapsar(f) or voltear(f)
             else:
                 ok = voltear(f) or colapsar(f)
+            if not ok and ls[f].min() < 0.1:
+                ok = colapsar(f, solo_plano=True)
             hechos += ok
         if borrar:
             F = np.delete(F, sorted(borrar), axis=0)
@@ -360,6 +392,13 @@ def pulir(mesh, nombre='', tol=TOL_PULIDO):
     g = M.simplify(tol).to_mesh()
     m = trimesh.Trimesh(g.vert_properties[:, :3], g.tri_verts, process=False)
     m = sanear(m)
+    for _ in range(3):      # a veces colapsar deja otra aguja: simplify + sanear otra vez
+        if not degenerados(m).any():
+            break
+        g = manifold3d.Manifold(manifold3d.Mesh(
+            vert_properties=np.asarray(m.vertices, np.float32),
+            tri_verts=np.asarray(m.faces, np.uint32))).simplify(tol).to_mesh()
+        m = sanear(trimesh.Trimesh(g.vert_properties[:, :3], g.tri_verts, process=False))
     f = trimesh.Trimesh(m.vertices.copy(), m.faces.copy(), process=False)
     f.merge_vertices()
     assert m.is_watertight and m.is_winding_consistent and f.is_watertight, \
@@ -428,9 +467,11 @@ def anillo_pozo(z):
 _env = mayor(unary_union([anillo_pozo(z) for z in
                           np.linspace(Z_SUELO + 0.3, Z_JUNTA - 0.5, 22)])).buffer(0)
 POZO = sin_dientes(mayor(_env.simplify(TOL_POZO)), 'POZO')
-log(f'  POZO: {len(_env.exterior.coords)} vertices -> {len(POZO.exterior.coords)-1} '
-    f'lados rectos, desviacion max {_env.hausdorff_distance(POZO):.2f} mm, '
-    f'area {POZO.area:.0f} mm2')
+POZO_MESHY = POZO          # el pozo del OBJ: sirve para aislar el ciervo
+if CORONA_BORDE == 'ciudadela':
+    POZO = ciudadela.POZO
+log(f'  POZO: {len(POZO.exterior.coords)-1} lados rectos, desviacion max al pozo '
+    f'de Meshy {_env.hausdorff_distance(POZO):.2f} mm, area {POZO.area:.0f} mm2')
 
 qs = secciones_xy(malla, Z_TRASERA + 0.5, min_area=200)
 qs.sort(key=lambda p: -p.area)
@@ -496,6 +537,13 @@ elif CORONA_BORDE == 'fuera':
     # se saca TOL_FUERA hacia fuera antes de enderezar: el contorno recto cubre
     # toda la zona plana y llega a la pared del escalon (entra 0-2*TOL_FUERA)
     AEX = mayor(_ext.buffer(TOL_FUERA, join_style=1).simplify(TOL_FUERA))
+elif CORONA_BORDE == 'ciudadela':
+    Z_ESCALON = plano_dominante(malla, Z_CORONA + 5, Z_CORONA + 14)
+    AEX = ciudadela.AEX
+    W2 = ciudadela.W2
+    log(f'  trazado de la Ciudadela: escalon en Z={Z_ESCALON:.2f}, marco '
+        f'{ciudadela.MARCO:.0f} mm, escalon {ciudadela.ESCALON:.0f} mm, entrantes '
+        f'{ciudadela.ENTRANTE:.0f} grados')
 else:   # 'canto'
     Z_ESCALON = plano_dominante(malla, Z_CORONA + 5, Z_CORONA + 14)
     import shapely as _sh
@@ -512,7 +560,12 @@ _min = off(POZO, PARED + HOLGURA + FALDA + 0.3)   # minimo para que quepa la fal
 _fuera = _min.difference(_ext)
 log(f'  (la falda pide {_fuera.area:.0f} mm2 por fuera del escalon del marco, '
     f'hasta {_ext.exterior.hausdorff_distance(_min.exterior) if not _fuera.is_empty else 0:.1f} mm)')
-AEX = sin_dientes(mayor(mayor(AEX.union(_min)).simplify(0.3)), 'AEX')
+if CORONA_BORDE == 'ciudadela':
+    # el trazado ya deja sitio a la falda: se comprueba, no se retoca
+    assert _min.difference(AEX.buffer(0.05)).area < 0.5, \
+        f'la falda no cabe en la corona ({_min.difference(AEX).area:.1f} mm2 fuera)'
+else:
+    AEX = sin_dientes(mayor(mayor(AEX.union(_min)).simplify(0.3)), 'AEX')
 CORONA = mayor(AEX.difference(POZO))
 log(f'  CORONA: {len(_ext.exterior.coords)} vertices -> '
     f'{len(AEX.exterior.coords)-1} lados rectos, area {CORONA.area:.0f} mm2, '
@@ -531,12 +584,16 @@ assert ESTRELLA.contains(P_TAPA), 'la tapa se sale de la estrella'
 # 3. el ciervo, en relieve sobre la pared del fondo
 # ----------------------------------------------------------------------------
 log('aislando el ciervo...')
-caja = prisma(POZO.buffer(-0.5, join_style=JS, mitre_limit=8),
+caja = prisma(POZO_MESHY.buffer(-0.5, join_style=JS, mitre_limit=8),
               Z_SUELO + 0.4, Z_CORONA + 4.0)
 tr = [c for c in bo('intersection', [malla, caja]).split(only_watertight=False)
       if c.volume > 100]
 tr.sort(key=lambda c: -c.volume)
 CIERVO = tr[0]
+if CORONA_BORDE == 'ciudadela':
+    # centrado en el pozo simetrico
+    CIERVO.apply_translation([ciudadela.CIERVO_DX, 0, 0])
+    log(f'  ciervo desplazado {ciudadela.CIERVO_DX:+.2f} mm en X para quedar centrado')
 SIL_CIERVO = trimesh.path.polygons.projected(
     CIERVO, normal=[0, 0, 1], precise=True).buffer(0).simplify(0.05)
 log(f'  ciervo original: vol {CIERVO.volume:.0f} mm3   Z {CIERVO.bounds[0][2]:.2f}..'
@@ -636,6 +693,91 @@ if CORONA_BORDE == 'canto':
             ESTRELLA.buffer(-3.0, join_style=1)), Z_JUNTA, Z_RELLENO)])
     log(f'  cara del escalon allanada a Z={Z_RELLENO:.2f} en {RELLENO_ANCHO:.0f} mm por fuera '
         f'de la corona (+{(MARCO.volume - malla.volume):.0f} mm3)')
+elif CORONA_BORDE == 'ciudadela':
+    Z_RELLENO = Z_ESCALON + RELLENO_SOBRE
+    RELLENO_ANCHO = ciudadela.ESCALON + TERRAZA_ANCHO
+    # (a) por fuera de la pared escalon->terraza: se rellena hasta la terraza con
+    # una superficie que copia su altura (la terraza de Meshy mas cercana, punto
+    # a punto). Entierra la rampa de Meshy y lo que quede del trazado viejo.
+    from scipy import ndimage
+    _ox, _oy, _sc, _n = GEO
+    _terr = D >= TERRAZA_MIN
+    _, (_jt, _it) = ndimage.distance_transform_edt(~_terr, return_indices=True)
+    T_TERRAZA = ndimage.median_filter(D[_jt, _it], size=5)
+
+    def _t_terraza(x, y):
+        c = np.clip(np.round((x - _ox) * _sc + _n / 2).astype(int), 0, _n - 1)
+        r = np.clip(np.round(_n / 2 - (y - _oy) * _sc).astype(int), 0, _n - 1)
+        return T_TERRAZA[r, c]
+    _anillo = W2.buffer(TERRAZA_ANCHO, join_style=JS, mitre_limit=8).difference(
+        W2.buffer(-0.05, join_style=JS, mitre_limit=8)).intersection(ESTRELLA.buffer(-1.0))
+    _z_arriba = 40.0
+    _M = manifold3d.Manifold(manifold3d.Mesh(
+        vert_properties=np.asarray(prisma_multi(_anillo, Z_JUNTA, _z_arriba).vertices, np.float32),
+        tri_verts=np.asarray(prisma_multi(_anillo, Z_JUNTA, _z_arriba).faces, np.uint32)))
+    _M = _M.refine_to_length(0.8)
+
+    def _alza(v):
+        v = np.array(v, dtype=np.float64)
+        t = np.maximum(_t_terraza(v[:, 0], v[:, 1]), Z_RELLENO + 0.5)
+        f = (v[:, 2] - Z_JUNTA) / (_z_arriba - Z_JUNTA)
+        v[:, 2] = Z_JUNTA + f * (t - Z_JUNTA)
+        return v
+    _g = _M.warp_batch(_alza).to_mesh()
+    TERRAZA = trimesh.Trimesh(_g.vert_properties[:, :3], _g.tri_verts, process=False)
+    # (b) el escalon: entre las dos paredes, un plano exacto (se rellena por debajo
+    # y se corta todo lo que sobresale); la pared escalon->terraza queda vertical
+    MARCO = bo('union', [malla, TERRAZA, prisma_multi(W2, Z_JUNTA, Z_RELLENO)])
+    MARCO = bo('difference', [MARCO, prisma_multi(W2, Z_RELLENO, Z_FRENTE + 1)])
+    # (c) el valle de abajo tenia el rombo vaciado por una ranura en V hasta el
+    # escalon: se le copia el relieve del valle lateral derecho (terraza, punta y
+    # facetas), girado con la simetria del pentagono y a la altura de la terraza
+    # de abajo. La silueta exterior no cambia.
+    _jj, _ii = np.mgrid[0:_n, 0:_n]
+    _X = (_ii - _n / 2) / _sc + _ox
+    _Y = (_n / 2 - _jj) / _sc + _oy
+    _C = np.array([0.0, -8.0])                        # centro del pentagono
+    _m_abajo, _m_lado = np.array(VALLE_ABAJO), np.array(VALLE_LADO)
+    _ang = np.arctan2(*(_m_lado - _C)[::-1]) - np.arctan2(*(_m_abajo - _C)[::-1])
+    _rot = np.array([[np.cos(_ang), -np.sin(_ang)], [np.sin(_ang), np.cos(_ang)]])
+    _eje = (_m_lado - _C) / np.linalg.norm(_m_lado - _C)
+    _desp = np.linalg.norm(_m_lado - _C) - np.linalg.norm(_m_abajo - _C)
+    _terr_lado = float(np.median(D[(np.hypot(_X - _m_lado[0], _Y - _m_lado[1]) < 16) & (D >= TERRAZA_MIN) & (D < 28.1)]))
+    _terr_abajo = float(np.median(D[(np.abs(_X) < 16) & (_Y > -75) & (_Y < -70) & (D >= TERRAZA_MIN)]))
+    _valido = D > -100
+    _, (_jv, _iv) = ndimage.distance_transform_edt(~_valido, return_indices=True)
+    _Dv = D[_jv, _iv]
+
+    def _t_valle(x, y):
+        pq = (np.c_[x, y] - _C) @ _rot.T + _C + _eje * _desp   # punto equivalente del valle lateral
+        c = np.clip(np.round((pq[:, 0] - _ox) * _sc + _n / 2).astype(int), 0, _n - 1)
+        r = np.clip(np.round(_n / 2 - (pq[:, 1] - _oy) * _sc).astype(int), 0, _n - 1)
+        return _Dv[r, c] + (_terr_abajo - _terr_lado)
+    # solo se anade material donde la copia queda por encima de lo que hay (la
+    # ranura y sus facetas); donde ya coinciden (la terraza) no se toca: dos
+    # superficies casi iguales se pellizcarian
+    _zona_px = (np.abs(_X) < VALLE_ANCHO) & (_Y < VALLE_TECHO) & (D > -100)
+    _xs, _ys = _X[_zona_px], _Y[_zona_px]
+    _sube = np.zeros_like(D, dtype=bool)
+    _sube[_zona_px] = _t_valle(_xs, _ys) > D[_zona_px] + VALLE_MARGEN
+    _zona = mayor(abrir(mascara_a_poligono(_sube, GEO, cierre=3).intersection(
+        ESTRELLA.buffer(-1.0, join_style=1)), 1.0))
+    _Mv = manifold3d.Manifold(manifold3d.Mesh(
+        vert_properties=np.asarray(prisma(_zona, Z_JUNTA, _z_arriba).vertices, np.float32),
+        tri_verts=np.asarray(prisma(_zona, Z_JUNTA, _z_arriba).faces, np.uint32))).refine_to_length(0.4)
+
+    def _alza_valle(v):
+        v = np.array(v, dtype=np.float64)
+        t = np.maximum(_t_valle(v[:, 0], v[:, 1]), Z_JUNTA + 1.0)
+        v[:, 2] = Z_JUNTA + (v[:, 2] - Z_JUNTA) / (_z_arriba - Z_JUNTA) * (t - Z_JUNTA)
+        return v
+    _g = _Mv.warp_batch(_alza_valle).to_mesh()
+    VALLE = trimesh.Trimesh(_g.vert_properties[:, :3], _g.tri_verts, process=False)
+    MARCO = bo('union', [MARCO, VALLE])
+    log(f'  marco: escalon plano a Z={Z_RELLENO:.2f}, pared vertical hasta la terraza, '
+        f'terraza rellenada {TERRAZA_ANCHO:.0f} mm; valle de abajo = copia del lateral '
+        f'girada {np.degrees(_ang):.1f} grados (terraza {_terr_lado:.2f} -> {_terr_abajo:.2f}; '
+        f'{_zona.area:.0f} mm2 rellenados)')
 else:
     Z_RELLENO, RELLENO_ANCHO = Z_CORONA, 0.0
 PIEDRA = bo('difference', [MARCO, HUECO_PIEDRA])
@@ -653,6 +795,10 @@ log('pieza de luz...')
 # salen de un solo prisma sin ranuras.
 CAJA = abrir(AEX.buffer(-FALDA, join_style=JS, mitre_limit=8)
              .difference(off(POZO, OFF_LUZ)), CAJA_MIN)
+_nucleo = abrir(CAJA.buffer(-CAJA_MAX / 2 + 1.0, join_style=1), 2.0)
+if not _nucleo.is_empty:
+    CAJA = abrir(CAJA.difference(_nucleo), CAJA_MIN)
+    log(f'  caja del LED: nucleo macizo de {_nucleo.area:.0f} mm2 en las puntas (puente < {CAJA_MAX:.0f} mm)')
 LUZ = bo('union', [
     prisma_multi(CORONA, Z_JUNTA, Z_CORONA),                                # corona
     bo('difference', [prisma_multi(AEX.difference(POZO), Z_TRASERA, Z_JUNTA),  # tubo + falda
