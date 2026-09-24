@@ -27,6 +27,7 @@ import trimesh
 import manifold3d
 from shapely.geometry import Polygon, LineString, Point, box as sbox
 from shapely.ops import unary_union, polygonize
+from geo import xy_material
 
 # ----------------------------------------------------------------------------
 # PARAMETROS
@@ -53,7 +54,8 @@ ESP_CORONA    = 3.5     # espesor de la placa de la corona
 
 CIERVO_RELIEVE = 15.0   # cuanto sobresale el ciervo de la pared del fondo
 CIERVO_PARED   = 2.2    # pared del ciervo (erosion 3D real)
-CIERVO_CLAVO   = 4.0    # cuanto se alargan las pezunas hacia el suelo del pozo
+CIERVO_BOCA    = 1.2    # pared que queda alrededor de la boca trasera del ciervo
+CIERVO_CLAVO   = 4.0    # cuanto se prolongan las pezunas hacia el suelo del pozo
                         # (se recortan a media pared del tubo: no asoman a la caja)
 
 TAPA_ESP      = 3.0     # espesor de la tapa (superpuesta a la trasera)
@@ -120,16 +122,20 @@ def prisma_multi(poly, z0, z1, min_area=0.5):
     return ms[0] if len(ms) == 1 else trimesh.boolean.union(ms, engine=ENGINE)
 
 
-def erosionar(mesh, r):
-    """Erosion 3D: interseccion de copias trasladadas (6 ejes + 8 diagonales).
-    Calibrado sobre una esfera: con r=2,2 deja entre 1,87 y 2,20 mm."""
+def _direcciones():
     dirs = [np.array(v, float) for v in
             ((1, 0, 0), (-1, 0, 0), (0, 1, 0), (0, -1, 0), (0, 0, 1), (0, 0, -1))]
     dirs += [np.array(v, float) / np.sqrt(3) for v in
              ((1, 1, 1), (1, 1, -1), (1, -1, 1), (1, -1, -1),
               (-1, 1, 1), (-1, 1, -1), (-1, -1, 1), (-1, -1, -1))]
+    return dirs
+
+
+def erosionar(mesh, r):
+    """Erosion 3D: interseccion de copias trasladadas (6 ejes + 8 diagonales).
+    Calibrado sobre una esfera: con r=2,2 deja entre 1,87 y 2,20 mm."""
     out = mesh
-    for d in dirs:
+    for d in _direcciones():
         c = mesh.copy()
         c.apply_translation(d * r)
         out = trimesh.boolean.intersection([out, c], engine=ENGINE)
@@ -353,14 +359,23 @@ CIERVO_REL.apply_translation([0, 0, -_atras])
 CIERVO_REL = trimesh.intersections.slice_mesh_plane(
     CIERVO_REL, plane_normal=[0, 0, 1], plane_origin=[0, 0, Z_SUELO], cap=True)
 CIERVO_REL = trimesh.Trimesh(CIERVO_REL.vertices, CIERVO_REL.faces)
-# las pezunas se hunden en el suelo del pozo para que el relieve quede soldado
-_pies = CIERVO_REL.copy()
-_pies.apply_translation([0, -CIERVO_CLAVO, 0])
+# boca trasera del relieve: solo dentro de su base real (el lomo es redondeado y
+# la base en el plano del fondo es pequena). Si se abriese con la silueta, un
+# plano cortaria el lomo donde es casi horizontal y la malla se pellizcaria.
+_base = xy_material(CIERVO_REL, Z_SUELO + 0.01).intersection(
+    xy_material(CIERVO_REL, Z_SUELO + 0.3))
+BOCA_CIERVO = _base.buffer(-CIERVO_BOCA, join_style=1)
+# las pezunas quedan a 0,5-1 mm del suelo del pozo: se prolonga su planta hacia
+# abajo en linea recta y se recorta a media pared del tubo, para soldar el
+# relieve sin asomar a la caja del LED. (Antes se copiaba el pie desplazado 4 mm
+# y en las patas inclinadas dejaba munones a la vista.)
 _ym = CIERVO_REL.bounds[0][1]
-_pies = bo('intersection', [_pies, prisma(
-    sbox(-500, _ym - CIERVO_CLAVO - 1, 500, _ym + 8),
-    Z_SUELO - 1, Z_SUELO + CIERVO_RELIEVE + 1)])
-# se recortan a media pared del tubo: se sueldan a el sin asomar a la caja del LED
+_rx = trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])   # Y -> Z
+_c = CIERVO_REL.copy()
+_c.apply_transform(_rx)
+_planta = xy_material(_c, _ym + 0.3).intersection(xy_material(_c, _ym + 0.8))
+_pies = prisma_multi(_planta.buffer(-0.05, join_style=1), _ym - CIERVO_CLAVO, _ym + 0.8)
+_pies.apply_transform(np.linalg.inv(_rx))
 _pies = bo('intersection', [_pies, prisma(off(POZO, PARED / 2),
                                           Z_SUELO - 1, Z_SUELO + CIERVO_RELIEVE + 1)])
 CIERVO_REL = bo('union', [CIERVO_REL, _pies])
@@ -433,11 +448,14 @@ LUZ = bo('union', [
                  Z_TRASERA, Z_JUNTA),                                       # falda
     CIERVO_REL,
 ])
-MACIZO = bo('union', [CIERVO_REL,
-                      prisma_multi(mayor(SIL_REL.buffer(-2.0, join_style=1)),
-                                   Z_SUELO - 10, Z_SUELO + 0.2)])
-LUZ = limpiar(bo('difference', [LUZ, erosionar(MACIZO, CIERVO_PARED)]))
-LUZ = pulir(LUZ, 'luz')
+# hueco del ciervo: erosion 3D; la boca trasera lo une con el agujero del pedestal
+HUECO_CIERVO = erosionar(CIERVO_REL, CIERVO_PARED)
+LUZ = limpiar(bo('difference', [LUZ, HUECO_CIERVO,
+                                prisma_multi(BOCA_CIERVO, Z_SUELO - 1, Z_SUELO + 3.0)]))
+log(f'  hueco del ciervo {HUECO_CIERVO.volume:.0f} mm3, boca trasera {BOCA_CIERVO.area:.0f} mm2')
+# 0,01 mm: la erosion deja dentro del ciervo pliegues de vacio de menos de
+# 0,01 mm que no existen en una impresion; pulir a esa tolerancia los cierra
+LUZ = pulir(LUZ, 'luz', tol=0.01)
 
 
 # ----------------------------------------------------------------------------
