@@ -162,6 +162,17 @@ Hecho:
 - Eje de simetría medido: X = 0 sin giro; alturas de terrazas simétricas
   (mediana 0,08 mm); las paredes difieren unos mm de un lado a otro.
 
+- Corrección de Sergi (24-09, capturas del laminador): en los dos valles de
+  arriba la cara del escalón de Meshy tiene hondonadas (Z 19–20 en vez de 21,2).
+  El borde por el canto se metía en ellas (derecha: se comía el escalón;
+  izquierda: dos planos). Ahora: el borde se toma a media pared (Z 16,0) y se
+  endereza con 2 mm; y la cara del escalón se RELLENA hasta un plano único
+  (Z_ESCALON + 0,15 = 21,34) en 8 mm por fuera del borde, antes de cortar el
+  rebaje. Hondonadas y restos de rampa quedan enterrados; donde la superficie
+  ya está más alta no cambia. Borde de la corona: 29 lados, valles simétricos.
+- `TOL_POZO` 1,2 → 0,9: pozo de 11 lados, 99 % de las paredes a < 1,05 mm del
+  original.
+
 `verificar.py`: **50/50**.
 
 Queda de Meshy sin tocar: la pata delantera modelada como una tabla plana.

@@ -44,7 +44,7 @@ OBJ = next((p for p in (
 ANCHO_MM      = 200.0   # ancho final de la estrella (manda la escala)
 APLANAR       = 0.5     # mm de textura que se quitan a la trasera para dejarla plana
 
-TOL_POZO      = 1.2     # con que tolerancia se enderezan los contornos
+TOL_POZO      = 0.9     # con que tolerancia se enderezan los contornos
 TOL_CORONA    = 1.2
 # borde exterior de la corona: 'dentro' = 0-2,4 mm antes del pie del escalon
 # (deja una tira de piedra a la altura de la corona); 'fuera' = hasta la pared
@@ -55,9 +55,15 @@ TOL_FUERA     = 0.6
 # 'canto' = por el canto de arriba de la pared corona->escalon: el rebaje se
 # lleva la rampa de Meshy entera y deja una pared vertical cuyo canto corta la
 # cara plana del escalon en perpendicular (sin rasantes, sin sierra)
-CANTO_BAJO    = 0.5     # el canto se toma esto por debajo del plano del escalon
+CANTO_NIVEL   = 0.5     # el borde se toma a esta fraccion de la pared corona->escalon
+                        # (a media pared: las hondonadas de la cara del escalon no
+                        # lo deforman)
+RELLENO_SOBRE = 0.15    # la cara del escalon se rellena hasta su plano + esto (mm)
+RELLENO_ANCHO = 8.0     # ... en esta franja por fuera del borde de la corona (mm)
 CANTO_FUERA   = 0.4     # y el borde se saca esto hacia fuera, sobre la cara plana
-CANTO_TOL     = 0.5     # tolerancia de enderezado de ese borde
+CANTO_TOL     = 2.0     # tolerancia de enderezado de ese borde: basta con que caiga
+                        # entre el pie de la rampa y la cara del escalon (lo de
+                        # dentro lo quita el rebaje, lo de fuera lo entierra el relleno)
 DIENTE_AREA   = 2.0     # vertices de los contornos que se quitan: triangulo < esto (mm2)
 ESQUINA_MAX   = 3.0     # lados cortos: se rehace la esquina si el cruce esta a < esto (mm)
 ESQUINA_AREA  = 5.0     # ... y el triangulo que cambia es < esto (mm2)
@@ -497,11 +503,11 @@ else:   # 'canto'
     _jj, _ii = np.mgrid[0:_n, 0:_n]
     _cerca = _sh.contains(_ext.buffer(8.0), _sh.points(
         ((_ii - _n / 2) / _sc + _ox).ravel(), ((_n / 2 - _jj) / _sc + _oy).ravel())).reshape(D.shape)
-    _can = Polygon(mascara_a_poligono((D > Z_CORONA - 3.5) & (D < Z_ESCALON - CANTO_BAJO) & _cerca,
+    _nivel = Z_CORONA + CANTO_NIVEL * (Z_ESCALON - Z_CORONA)
+    _can = Polygon(mascara_a_poligono((D > Z_CORONA - 3.5) & (D < _nivel) & _cerca,
                                       GEO).exterior)
     AEX = mayor(_can.buffer(CANTO_FUERA, join_style=1).simplify(CANTO_TOL))
-    log(f'  escalon en Z={Z_ESCALON:.2f}; borde de la corona por su canto '
-        f'({_can.area - _ext.area:.0f} mm2 mas que la zona plana)')
+    log(f'  escalon en Z={Z_ESCALON:.2f}; borde de la corona a media pared (Z={_nivel:.1f})')
 _min = off(POZO, PARED + HOLGURA + FALDA + 0.3)   # minimo para que quepa la falda
 _fuera = _min.difference(_ext)
 log(f'  (la falda pide {_fuera.area:.0f} mm2 por fuera del escalon del marco, '
@@ -618,7 +624,21 @@ for x, y in TORNILLOS:
 # 5. PIEDRA
 # ----------------------------------------------------------------------------
 log('piedra...')
-PIEDRA = bo('difference', [malla, HUECO_PIEDRA])
+# la cara del escalon, allanada: por fuera del borde de la corona se rellena hasta
+# un plano unico. Entierra las hondonadas de Meshy y lo que quede de la rampa, y
+# la pared del rebaje sube vertical y limpia desde la corona hasta ese plano.
+# Donde la superficie ya esta mas alta (la pared siguiente, las terrazas) no cambia.
+MARCO = malla
+if CORONA_BORDE == 'canto':
+    Z_RELLENO = Z_ESCALON + RELLENO_SOBRE
+    MARCO = bo('union', [malla, prisma_multi(
+        AEX.buffer(RELLENO_ANCHO, join_style=JS, mitre_limit=8).intersection(
+            ESTRELLA.buffer(-3.0, join_style=1)), Z_JUNTA, Z_RELLENO)])
+    log(f'  cara del escalon allanada a Z={Z_RELLENO:.2f} en {RELLENO_ANCHO:.0f} mm por fuera '
+        f'de la corona (+{(MARCO.volume - malla.volume):.0f} mm3)')
+else:
+    Z_RELLENO, RELLENO_ANCHO = Z_CORONA, 0.0
+PIEDRA = bo('difference', [MARCO, HUECO_PIEDRA])
 PIEDRA = bo('difference', [PIEDRA, CANAL])
 PIEDRA = limpiar(bo('difference', [PIEDRA] + TALADROS))
 PIEDRA = pulir(PIEDRA, 'piedra')
@@ -715,5 +735,5 @@ with open(os.path.join(OUT, 'contornos.wkt'), 'w') as f:
             + CORONA.wkt + '\n')
 np.save(os.path.join(OUT, 'cotas.npy'), np.array([
     S, Z_TRASERA, Z_SUELO, Z_CORONA, Z_JUNTA, Z_FRENTE,
-    OFF_LUZ, OFF_PIEDRA, TAPA_ESP, CIERVO_RELIEVE, HOLGURA, FALDA]))
+    OFF_LUZ, OFF_PIEDRA, TAPA_ESP, CIERVO_RELIEVE, HOLGURA, FALDA, Z_RELLENO, RELLENO_ANCHO]))
 log('hecho')

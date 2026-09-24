@@ -68,7 +68,8 @@ T = trimesh.load(os.path.join(OUT, '3_tapa.ply'), process=False)
 SIL_CIERVO, POZO, AEX, CORONA = [_wkt.loads(l) for l in
                                  open(os.path.join(OUT, 'contornos.wkt')).read().splitlines()[:4]]
 (S, Z_TRASERA, Z_SUELO, Z_CORONA, Z_JUNTA, Z_FRENTE, OFF_LUZ, OFF_PIEDRA,
- TAPA_ESP, CIERVO_RELIEVE, HOLGURA, FALDA) = np.load(os.path.join(OUT, 'cotas.npy'))
+ TAPA_ESP, CIERVO_RELIEVE, HOLGURA, FALDA, Z_RELLENO, RELLENO_ANCHO) = np.load(
+    os.path.join(OUT, 'cotas.npy'))
 
 log('=' * 74)
 log('1. PIEZAS')
@@ -258,7 +259,12 @@ else:
     xy = shapely.points(sup[:, :2])
     vista = (~shapely.contains(SIL_CIERVO.buffer(0.6), xy)) & (sup[:, 2] > Z_TRASERA + 3.5)
     dentro = shapely.contains(AEX.buffer(0.3), xy)
-    mal_m = vista & ~dentro & (dd > 0.3)
+    # la franja del escalon allanada (por fuera de la corona, hasta Z_RELLENO)
+    # se ha subido a proposito: ahi se admite hasta lo que se relleno
+    allanado = shapely.contains(AEX.buffer(RELLENO_ANCHO + 0.3), xy) & (sup[:, 2] < Z_RELLENO + 0.3)
+    mal_m = vista & ~dentro & ~allanado & (dd > 0.3)
+    log(f'  cara del escalon allanada a Z={Z_RELLENO:.2f}: {(vista & ~dentro & allanado).sum()} puntos, '
+        f'subidos hasta {dd[vista & ~dentro & allanado].max() if (vista & ~dentro & allanado).any() else 0:.2f} mm')
     # dentro de AEX, por encima de la junta: la corona (plano) y la pared
     # vertical que sustituye a la rampa de Meshy hasta el escalon, y el marco
     # que quita la falda (opcion B): rehecho a proposito. Por debajo de la
