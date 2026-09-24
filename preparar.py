@@ -251,9 +251,12 @@ def anillo_pozo(z):
 
 
 # POZO: envolvente del pozo en toda su altura, enderezada. Es la cara VISTA de
-# la pared del pozo, y de ella salen tubo, ranura y pedestal.
+# la pared del pozo, y de ella salen tubo, ranura y pedestal. Se muestrea solo
+# por debajo de la junta: mas arriba, los rellanos de la corona (en la esquina
+# de la roca hay uno a Z~+9) salen como hueco y la envolvente los convertia en
+# un pocillo hasta el fondo que el original no tiene.
 _env = mayor(unary_union([anillo_pozo(z) for z in
-                          np.linspace(Z_SUELO + 0.3, Z_CORONA - 1.5, 22)])).buffer(0)
+                          np.linspace(Z_SUELO + 0.3, Z_JUNTA - 0.5, 22)])).buffer(0)
 POZO = mayor(_env.simplify(TOL_POZO))
 log(f'  POZO: {len(_env.exterior.coords)} vertices -> {len(POZO.exterior.coords)-1} '
     f'lados rectos, desviacion max {_env.hausdorff_distance(POZO):.2f} mm, '

@@ -59,9 +59,11 @@ donde va su trozo de tira LED.
 ## Impresión
 
 Las tres salen **en la orientación en la que están exportadas**, cara plana abajo
-y todas las cavidades abriendo hacia arriba. **Sin soportes.** Lo único que se
-puentea es la primera capa de la corona, 12,8 mm entre el tubo y la falda: es el
-puente de la tapa de una caja, el laminador lo hace solo.
+y todas las cavidades abriendo hacia arriba. Piedra y tapa, **sin soportes**.
+La luz, **con soportes solo debajo del ciervo**: su relieve empieza 13,4 mm por
+encima de la cama (10 islas entre Z −13,0 y −3,4). Los soportes tocan el lomo
+trasero, que va contra el fondo y no se ve. Lo demás de la luz se puentea solo:
+la primera capa de la corona es un puente de 10,9 mm entre el tubo y la falda.
 
 - Boquilla 0,4 · capa 0,2 · **3 perímetros**.
 - Piedra: relleno 10–15 %. Huella de 200 × 198 mm, comprueba que te cabe.
@@ -78,8 +80,9 @@ Meshy: agarra la primera capa y la tapa asienta plana. Es la única cara tocada.
    asiente en su rebaje.
 2. Pega la tira LED dentro de la caja de `2_luz`, sobre la tapa, y un trozo justo
    debajo del agujero del ciervo. Pasa el cable por la muesca del espigo.
-3. Atornilla `3_tapa`: **5 × M3 × 10 autorroscantes**, avellanados, a taladros de
-   Ø2,7 y 8 mm de fondo. Su pedestal es el fondo del nicho y, al apretar, deja la
+3. Atornilla `3_tapa`: **5 × M3 × 10 autorroscantes de cabeza avellanada**
+   (el avellanado de 90° abre hacia la cara de fuera y la cabeza queda
+   enrasada), a taladros de Ø2,7 y 8 mm de fondo. Su pedestal es el fondo del nicho y, al apretar, deja la
    pieza de luz cogida contra su rebaje: no hace falta pegamento.
 4. El cable baja por el canal de la trasera y sale por la muesca de entre los dos
    pies, a ras de mesa.

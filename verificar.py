@@ -184,13 +184,17 @@ if vis.any():
     np.maximum.at(hmax, k, P.triangles[vis][:, :, 2].max(1) - Z_CORONA)
 paso = b.length / len(s)
 ancho_c = np.array([POZO.exterior.distance(Point(p)) for p in mues])
-log(f'  marco cortado por encima de la corona: {P.area_faces[vis].sum():.0f} mm2 de pared nueva '
+_pared = P.submesh([np.where((d < 0.02) & (np.abs(P.face_normals[:, 2]) < 0.05))[0]], append=True)
+_arriba = trimesh.intersections.slice_mesh_plane(_pared, [0, 0, 1], [0, 0, Z_CORONA + 0.3])
+log(f'  marco cortado por encima de la corona: {_arriba.area:.0f} mm2 de pared nueva '
     f'a la vista, en {(hmax > 0.5).sum()*paso:.0f} mm de {b.length:.0f} mm de contorno, '
     f'hasta {hmax.max():.1f} mm de alto')
 log(f'  en esos tramos la corona mide {ancho_c[hmax > 0.5].min() if (hmax > 0.5).any() else 0:.1f}'
     f'-{ancho_c[hmax > 0.5].max() if (hmax > 0.5).any() else 0:.1f} mm '
     f'(minimo que pide la falda: {OFF_LUZ + HOLGURA + FALDA + 0.3:.1f} mm)')
-chk((hmax > 0.5).sum() == 0, 'la falda no muerde el escalon visible del marco')
+# Decision de Sergi (24-09, opcion B): se deja asi para verlo impreso. No cuenta
+# como fallo, pero se informa siempre por si se cambia a la opcion A.
+log('  ACEPTADO (opcion B): la franja de corona de la falda recorta el marco en esos tramos')
 
 log('')
 log('4. EL MONTAJE REPRODUCE EL MODELO ORIGINAL')
@@ -210,8 +214,9 @@ else:
         if a.is_empty or bb.is_empty:
             continue
         ca, cb = contorno(a), contorno(bb)
-        peor_ext = max(peor_ext, ca.symmetric_difference(cb).area / ca.length)
-    chk(peor_ext < 0.05, f'silueta exterior intacta ({peor_ext:.3f} mm)')
+        dif = ca.symmetric_difference(cb).difference(AEX.buffer(0.5))
+        peor_ext = max(peor_ext, dif.area / ca.length)
+    chk(peor_ext < 0.05, f'silueta exterior intacta fuera de la corona ({peor_ext:.3f} mm)')
 
     # superficie VISTA del original: fuera de la corona tiene que seguir igual
     # (0,3 mm); dentro, el pozo y la corona se han enderezado a proposito
@@ -222,12 +227,18 @@ else:
     vista = (~shapely.contains(SIL_CIERVO.buffer(0.6), xy)) & (sup[:, 2] > Z_TRASERA + 3.5)
     dentro = shapely.contains(AEX.buffer(0.3), xy)
     mal_m = vista & ~dentro & (dd > 0.3)
-    mal_c = vista & dentro & (dd > 1.2)
+    # dentro de AEX: por encima de la corona es el marco que quita la falda
+    # (opcion B, aceptada); por debajo, las paredes del pozo enderezadas
+    b_ok = vista & dentro & (sup[:, 2] > Z_CORONA + 0.5)
+    pz = vista & dentro & ~b_ok
+    mal_c = pz & (dd > 1.2)
     log(f'  marco: {mal_m.sum()} de {(vista & ~dentro).sum()} puntos se apartan > 0,3 mm')
-    log(f'  pozo y corona: {mal_c.sum()} de {(vista & dentro).sum()} puntos se apartan > 1,2 mm'
-        + (f' (peor {dd[vista & dentro].max():.1f} mm)' if (vista & dentro).any() else ''))
+    log(f'  marco quitado por la falda (opcion B, aceptado): {(b_ok & (dd > 1.2)).sum()} puntos')
+    if pz.any():
+        log(f'  pozo y corona: {mal_c.sum()} de {pz.sum()} puntos se apartan > 1,2 mm; '
+            f'percentiles 50/90/99/max: {np.round(np.percentile(dd[pz], [50, 90, 99, 100]), 2).tolist()} mm')
     chk(mal_m.sum() / max((vista & ~dentro).sum(), 1) < 0.005, 'el marco visto queda intacto')
-    chk(mal_c.sum() / max((vista & dentro).sum(), 1) < 0.01,
+    chk(mal_c.sum() / max(pz.sum(), 1) < 0.01,
         'el pozo y la corona se apartan del original como mucho la tolerancia de enderezado')
 
 log('')
@@ -307,16 +318,29 @@ def ancho(geom, lim=12.0):
     return 2 * lo
 
 
+# zona donde se ACEPTAN soportes (decision de Sergi, 24-09): solo bajo el
+# ciervo de la pieza de luz, dentro del pozo. Su lomo va contra el fondo y las
+# marcas no se ven.
+ZONA_SOPORTE = {'luz': (POZO.buffer(-0.3), Z_SUELO - 0.5, Z_SUELO + CIERVO_RELIEVE + 0.5)}
 for n, m in (('piedra', P), ('luz', L), ('tapa', T)):
     z0, z1 = m.bounds[0][2], m.bounds[1][2]
     dz = 0.4
     peor_a, peor_z, peor_g, prev = 0.0, None, None, None
+    islas_ok, islas_mal = [], []
     for z in np.arange(z0 + 0.25, z1 - 0.25, dz):
         cur = xy_material(m, z)
         if cur.is_empty:
             continue
         if prev is not None:
             libre = cur.difference(prev.buffer(dz))
+            # islas: trozos de la capa que no tocan NADA de la capa de debajo
+            for q in anillos(cur):
+                if q.area > 0.05 and not q.intersects(prev.buffer(0.05)):
+                    zs = ZONA_SOPORTE.get(n)
+                    dentro = zs and zs[1] <= z <= zs[2] and zs[0].contains(q)
+                    (islas_ok if dentro else islas_mal).append((round(float(z), 1), q))
+            libre = libre.difference(unary_union([q for _, q in islas_ok + islas_mal])) \
+                if islas_ok or islas_mal else libre
             if libre.area > peor_a:
                 peor_a, peor_z, peor_g = libre.area, z, libre
         prev = cur
@@ -326,7 +350,12 @@ for n, m in (('piedra', P), ('luz', L), ('tapa', T)):
         f'puente de {w:.1f} mm')
     # un puente apoyado en los dos lados hasta 15 mm lo hace el laminador solo;
     # lo que no vale es un voladizo en el aire
-    chk(w < 15.0, f'{n}: nada que pida soporte (puente de {w:.1f} mm)')
+    chk(w < 15.0, f'{n}: puentes que el laminador hace solo (el peor, {w:.1f} mm)')
+    if islas_ok:
+        log(f'  {n:7s} {len(islas_ok)} islas bajo el ciervo, entre Z={islas_ok[0][0]:+.1f} y '
+            f'{islas_ok[-1][0]:+.1f}: LLEVAN SOPORTE (aceptado)')
+    chk(not islas_mal, f'{n}: ninguna isla en el aire fuera de la zona con soporte'
+        + (f' ({len(islas_mal)}: Z {sorted(set(z for z, _ in islas_mal))[:6]})' if islas_mal else ''))
 
 log('')
 log('8. MEDIDAS')

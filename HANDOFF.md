@@ -103,41 +103,39 @@ tapa:   la limpieza abria la malla, se deja como estaba             137.5 cm3
    `render.py` (rasterizador propio) y compara con la versión anterior.
 5. Actualizar el `README.md` con las cotas nuevas cuando esté cerrado.
 
-## Sesión del 24-09 (nube): qué se hizo y qué queda
+## Sesión del 24-09 (nube): estado
 
-**Las piezas .stl/.ply de la carpeta NO están regeneradas**: el OBJ no se subió
-al repo y `preparar.py` no se ha podido ejecutar aquí. Hay que subirlo como
-`meshy.obj` en esta carpeta (preparar y verificar lo buscan ahí primero).
+El OBJ está en el repo como `meshy.obj`; `preparar.py` y `verificar.py` lo
+buscan ahí primero. Piezas regeneradas. `verificar.py`: **40/43**.
+
+Decisiones de Sergi (24-09):
+- **Falda, opción B**: se deja la franja de corona que recorta el marco (bloque
+  de abajo y esquina de la roca) para verlo impreso. Si no gusta, opción A:
+  sin corona donde el original no la tiene, placa escondida bajo el marco.
+- **Soportes solo bajo el ciervo** en la pieza de luz (su relieve empieza en el
+  aire en la orientación de impresión). Descartado el apoyo oculto en el pedestal.
 
 Hecho:
-- `verificar.py` adaptado a las cotas y contornos nuevos, con comprobaciones
-  nuevas: malla limpia (pellizcos, contactos entre láminas, triángulos
-  degenerados), la regla de la luz pared a pared, la falda contra el marco y el
-  recorrido de montaje con pasos de 0,1 / 0,25 / 0,5 mm además de los de antes.
-  Sobre las piezas actuales: 30/38, sección 4 sin ejecutar (falta el OBJ).
-- `pulir()` reescrito: primero exige que la malla de la booleana no tenga
-  pellizcos (si los tiene, para y dice dónde: es diseño), luego colapsa astillas
-  con `Manifold.simplify(0,001 mm)`, que no puede abrir la malla.
-- Causa de que la tapa no se pudiera limpiar: el avellanado estaba AL REVÉS
-  (Ø3,6 por fuera, Ø5,9 contra la piedra) y su cono tocaba el taladro en un
-  círculo exacto. Ahora es un solo sólido de revolución que abre hacia fuera.
-  Probado sobre la tapa: 0 pellizcos, 0 degenerados, 0 astillas tras pulir.
-- Las pezuñas atravesaban el tubo y asomaban 1–3 mm² dentro de la caja del LED:
-  ahora se recortan a media pared del tubo.
+- `pulir()`: para si la booleana deja pellizcos (fallo de diseño) y colapsa
+  astillas con `Manifold.simplify` (0,001 mm; la luz 0,01 mm, que cierra los
+  pliegues de vacío < 0,01 mm que deja la erosión dentro del ciervo).
+- Tapa: el avellanado estaba al revés y su cono tocaba el taladro en un círculo.
+- Luz: boca trasera del ciervo dentro de su base real (el prisma de la silueta
+  cortaba el lomo casi horizontal y pellizcaba); pezuñas prolongadas en recto
+  hasta media pared del tubo (antes: muñones fantasma y asomaban a la caja).
+- POZO: la envolvente se muestrea solo hasta la junta. Antes llegaba a Z +9,4 y
+  metía en el pozo un rellano de la corona (esquina de la roca, Z ≈ +9), creando
+  un pocillo iluminado de 24 mm que el original no tiene. Desvío al original:
+  19,4 → 1,74 mm.
+- `verificar.py`: malla limpia, regla de la luz, falda, sección 4 separando lo
+  aceptado, recorrido fino, e islas en el aire (la de antes no las veía).
 
-Pendiente (todo necesita el OBJ):
-1. Luz, pellizco en Z_SUELO+0,2: la tapa del prisma `MACIZO`
-   (`SIL_REL.buffer(-2)`, hasta Z_SUELO+0,2) roza la piel del relieve. Rehacer el
-   vaciado prolongando hacia atrás la sección real de la base del relieve.
-2. Luz, vacío de espesor cero en (0,8, −38,5, −2,4): donde la pata mide < 4,4 mm
-   la erosión de 2,2 deja una lámina. Hacer apertura (erosionar 2,4 y dilatar 0,2).
-3. Luz, muñones fantasma: la copia de pezuñas desplazada 4 mm en −Y se ve junto
-   a las patas inclinadas. Mejor extruir la planta de las pezuñas en −Y.
-4. Piedra: 9 agujas en el canto de la trasera (Z=−26,41): imantar al plano los
-   vértices del OBJ a menos de 0,02 mm antes de cortar.
-5. **Falda contra el marco (decisión de Sergi)**: el rebaje corta marco visible en
-   88 mm de contorno, hasta 17,3 mm de alto, 1 881 mm² (abajo, bajo las pezuñas, y
-   en la esquina de la roca). Ver `falda_marco.png` y `falda_zoom.png`.
+Los 3 fallos que quedan:
+1. 3 triángulos degenerados en la piedra (canto de la trasera, Z −26,41) y 19
+   en la luz. Microscópicos (alturas < 0,1 micras); probado voltear agujas
+   (22 → 17), falta rematar.
+2. Paredes del pozo: 25 de 599 puntos a más de 1,2 mm del original (mediana
+   0,07, máx. 1,74 mm): la envolvente enderezada con 15 lados rectos.
 
 ## Cómo trabaja Sergi (importante)
 
