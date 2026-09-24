@@ -130,12 +130,15 @@ Hecho:
 - `verificar.py`: malla limpia, regla de la luz, falda, sección 4 separando lo
   aceptado, recorrido fino, e islas en el aire (la de antes no las veía).
 
-Los 3 fallos que quedan:
-1. 3 triángulos degenerados en la piedra (canto de la trasera, Z −26,41) y 19
-   en la luz. Microscópicos (alturas < 0,1 micras); probado voltear agujas
-   (22 → 17), falta rematar.
-2. Paredes del pozo: 25 de 599 puntos a más de 1,2 mm del original (mediana
-   0,07, máx. 1,74 mm): la envolvente enderezada con 15 lados rectos.
+- Malla perfecta: `sanear()` en `pulir()` quita los triángulos degenerados
+  (voltea agujas, colapsa aristas < 0,001 mm con condición de enlace) y
+  `pulir()` exige 0. `verificar.py` comprueba también los .stl: 0 degenerados.
+- `render.py` con z-buffer: el algoritmo del pintor sacaba esquirlas en las
+  paredes del pozo que no existían en el modelo (Sergi las marcó el 24-09).
+
+`verificar.py`: **45/46**. Único fallo: paredes del pozo, 25 de 599 puntos a más
+de 1,2 mm del original (mediana 0,07, máx. 1,74 mm), por enderezarlas en 15
+lados rectos. Se reduce con `TOL_POZO` más pequeño (más lados).
 
 ## Cómo trabaja Sergi (importante)
 

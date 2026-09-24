@@ -96,6 +96,16 @@ for n, m in (('piedra', P), ('luz', L), ('tapa', T)):
     chk(deg.sum() == 0, f'{n}: {deg.sum()} triangulos degenerados (arista nula o aguja); '
                         f'{(m.area_faces < 1e-3).sum()} por debajo de 0,001 mm2')
 
+# lo que se abre en el laminador: el .stl (precision simple, sin conectividad)
+for n in ('1_piedra', '2_luz', '3_tapa'):
+    st = trimesh.load(os.path.join(OUT, n + '.stl'))      # trimesh fusiona vertices al cargar
+    t = st.triangles
+    ls = np.linalg.norm(t[:, [1, 2, 0]] - t, axis=2)
+    deg = (ls.min(1) < 1e-6) | (2 * st.area_faces / np.maximum(ls.max(1), 1e-12) < 1e-4)
+    chk(st.is_watertight and st.is_winding_consistent and deg.sum() == 0
+        and len(st.split(only_watertight=False)) == 1,
+        f'{n}.stl: cerrado, coherente, de una pieza y {deg.sum()} degenerados')
+
 log('')
 log('2. INTERFERENCIAS ENTRE PIEZAS')
 for a, b, na, nb in ((P, L, 'piedra', 'luz'), (P, T, 'piedra', 'tapa'),

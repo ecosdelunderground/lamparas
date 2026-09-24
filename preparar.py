@@ -167,6 +167,67 @@ def degenerados(mesh):
     return (ls.min(1) < 1e-6) | (h < 1e-4)
 
 
+def sanear(mesh, corta=1e-3, max_iter=30):
+    """Elimina los triangulos degenerados que deja simplify sin mover la superficie:
+    - aguja (el tercer vertice cae sobre la arista larga): se voltea esa arista;
+    - casquete (una arista de menos de `corta`): se colapsa esa arista, solo si
+      no pellizca la malla (los dos extremos solo comparten los 2 vecinos
+      opuestos: condicion de enlace)."""
+    V = np.asarray(mesh.vertices, float).copy()
+    F = np.asarray(mesh.faces).copy()
+    for _ in range(max_iter):
+        t = V[F]
+        ls = np.linalg.norm(t[:, [1, 2, 0]] - t, axis=2)      # arista k: F[k] -> F[k+1]
+        area = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
+        h = 2 * area / np.maximum(ls.max(1), 1e-12)
+        malas = np.where((h < 1e-4) | (ls.min(1) < 1e-6))[0]
+        if not len(malas):
+            break
+        e = np.stack([F, np.roll(F, -1, axis=1)], axis=2).reshape(-1, 2)
+        cara = np.repeat(np.arange(len(F)), 3)
+        mapa = dict(zip(map(tuple, e), cara))
+        vecinos = {}
+        for a, b in e:
+            vecinos.setdefault(a, set()).add(b); vecinos.setdefault(b, set()).add(a)
+        tocadas, borrar, hechos = set(), set(), 0
+        for f in malas:
+            if f in tocadas:
+                continue
+            if ls[f].min() < corta:                       # casquete: colapsar la arista corta
+                k = int(np.argmin(ls[f]))
+                a, b = F[f][k], F[f][(k + 1) % 3]
+                g = mapa.get((b, a))
+                if g is None or g in tocadas:
+                    continue
+                opuestos = {F[f][(k + 2) % 3]} | {v for v in F[g] if v != a and v != b}
+                if (vecinos[a] & vecinos[b]) != opuestos:
+                    continue
+                caras_b = np.where((F == b).any(1))[0]
+                if tocadas & set(caras_b.tolist()):
+                    continue
+                F[F == b] = a
+                borrar.update((f, g)); tocadas.update(caras_b.tolist()); tocadas.update((f, g))
+                hechos += 1
+            else:                                          # aguja: voltear la arista larga
+                k = int(np.argmax(ls[f]))
+                a, b, c = F[f][k], F[f][(k + 1) % 3], F[f][(k + 2) % 3]
+                g = mapa.get((b, a))
+                if g is None or g in tocadas:
+                    continue
+                d = [v for v in F[g] if v != a and v != b][0]
+                if c == d or d in vecinos[c]:
+                    continue
+                F[f] = (a, d, c); F[g] = (d, b, c)
+                tocadas.update((f, g)); hechos += 1
+        if borrar:
+            F = np.delete(F, sorted(borrar), axis=0)
+        if not hechos:
+            break
+    m = trimesh.Trimesh(V, F, process=False)
+    m.remove_unreferenced_vertices()
+    return m
+
+
 def pulir(mesh, nombre='', tol=TOL_PULIDO):
     """Quita las astillas de las booleanas sin abrir la malla.
 
@@ -177,7 +238,9 @@ def pulir(mesh, nombre='', tol=TOL_PULIDO):
        limpiar() se para el script en vez de disimularlo.
     2. Colapsa aristas cortas y triangulos astilla DENTRO de manifold, que por
        construccion no puede dejar la malla abierta, sin mover ninguna
-       superficie mas de `tol`."""
+       superficie mas de `tol`.
+    3. Quita los triangulos degenerados que queden (sanear) y exige que no
+       quede ninguno."""
     f = trimesh.Trimesh(mesh.vertices.copy(), mesh.faces.copy(), process=False)
     f.merge_vertices()
     if not f.is_watertight:
@@ -194,7 +257,12 @@ def pulir(mesh, nombre='', tol=TOL_PULIDO):
         tri_verts=np.asarray(mesh.faces, np.uint32)))
     g = M.simplify(tol).to_mesh()
     m = trimesh.Trimesh(g.vert_properties[:, :3], g.tri_verts, process=False)
-    assert m.is_watertight and m.is_winding_consistent, f'{nombre}: el pulido abrio la malla'
+    m = sanear(m)
+    f = trimesh.Trimesh(m.vertices.copy(), m.faces.copy(), process=False)
+    f.merge_vertices()
+    assert m.is_watertight and m.is_winding_consistent and f.is_watertight, \
+        f'{nombre}: el pulido abrio la malla'
+    assert not degenerados(m).any(), f'{nombre}: quedan {degenerados(m).sum()} triangulos degenerados'
     log(f'    pulido {nombre}: {len(mesh.faces)} -> {len(m.faces)} caras, '
         f'astillas <0,001 mm2 {(mesh.area_faces < 1e-3).sum()} -> '
         f'{(m.area_faces < 1e-3).sum()}, degenerados {degenerados(mesh).sum()} -> '
