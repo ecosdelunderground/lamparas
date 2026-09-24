@@ -17,7 +17,7 @@ from shapely.geometry import Polygon, Point
 from shapely.ops import unary_union
 from shapely import wkt as _wkt
 from scipy.spatial import cKDTree
-from geo import xy_material, contactos
+from geo import xy_material, contactos, estrechos
 from render import rasterize, sheet
 
 OUT = os.path.dirname(os.path.abspath(__file__))
@@ -105,6 +105,28 @@ for n in ('1_piedra', '2_luz', '3_tapa'):
     chk(st.is_watertight and st.is_winding_consistent and deg.sum() == 0
         and len(st.split(only_watertight=False)) == 1,
         f'{n}.stl: cerrado, coherente, de una pieza y {deg.sum()} degenerados')
+
+# contornos limpios: sin zigzags ni puntas (dientes que deja enderezar)
+for n, pol in (('POZO', POZO), ('borde de la corona', AEX)):
+    c = np.array(pol.exterior.coords)[:-1]
+    u = np.roll(c, 1, 0) - c; w_ = np.roll(c, -1, 0) - c
+    tri = 0.5 * np.abs(u[:, 0] * w_[:, 1] - u[:, 1] * w_[:, 0])
+    ang = np.degrees(np.arccos(np.clip((u * w_).sum(1) / np.linalg.norm(u, axis=1)
+                                       / np.linalg.norm(w_, axis=1), -1, 1)))
+    chk(tri.min() >= 2.0 and ang.min() >= 45,
+        f'{n}: sin dientes ({len(c)} lados; angulo min {ang.min():.0f} deg, '
+        f'triangulo min {tri.min():.1f} mm2)')
+
+# lenguetas y rendijas de menos de 0,8 mm en lo que se construye (no en la
+# superficie de Meshy): toda la tapa y la pieza de luz fuera del ciervo
+# (el ciervo y sus pezunas son modelado de Meshy: sus detalles no cuentan)
+for n, m, zona in (('tapa', T, None),
+                   ('luz fuera del ciervo', L, AEX.buffer(1).difference(POZO.buffer(-0.3))
+                    .difference(SIL_CIERVO.buffer(1.5)))):
+    e = estrechos(m, zona=zona)
+    sitios = sorted({(round(q.centroid.x), round(q.centroid.y)) for _, _, q in e})
+    chk(not e, f'{n}: {len(e)} lenguetas o rendijas de menos de 0,8 mm'
+        + (f' en {sitios[:6]}' if e else ''))
 
 log('')
 log('2. INTERFERENCIAS ENTRE PIEZAS')

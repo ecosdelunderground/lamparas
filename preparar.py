@@ -46,6 +46,16 @@ APLANAR       = 0.5     # mm de textura que se quitan a la trasera para dejarla 
 
 TOL_POZO      = 1.2     # con que tolerancia se enderezan los contornos
 TOL_CORONA    = 1.2
+# borde exterior de la corona: 'dentro' = 0-2,4 mm antes del pie del escalon
+# (deja una tira de piedra a la altura de la corona); 'fuera' = hasta la pared
+# del escalon (la corona llega a la pared; el corte entra 0-2*TOL_FUERA en ella
+# y, al cruzar en rasante la pared texturada de Meshy, deja costura en sierra)
+CORONA_BORDE  = 'dentro'
+TOL_FUERA     = 0.6
+DIENTE_AREA   = 2.0     # vertices de los contornos que se quitan: triangulo < esto (mm2)
+ESQUINA_MAX   = 3.0     # lados cortos: se rehace la esquina si el cruce esta a < esto (mm)
+ESQUINA_AREA  = 5.0     # ... y el triangulo que cambia es < esto (mm2)
+ESQUINA_LADO  = 4.0     # ... y el lado corto mide < esto (mm)
 
 PARED         = 2.0     # pared translucida (tubo del pozo)
 FALDA         = 2.0     # pared de la falda exterior, oculta en la piedra
@@ -55,13 +65,20 @@ ESP_CORONA    = 3.5     # espesor de la placa de la corona
 CIERVO_RELIEVE = 15.0   # cuanto sobresale el ciervo de la pared del fondo
 CIERVO_PARED   = 2.2    # pared del ciervo (erosion 3D real)
 CIERVO_BOCA    = 1.2    # pared que queda alrededor de la boca trasera del ciervo
+CIERVO_HUECO_MIN = 8.0  # solo se vacia donde la silueta es mas ancha que esto
+                        # (cuerpo, cuello, cabeza): en patas y cuernas el hueco
+                        # acabaria en laminas de vacio que se ven al trasluz
 CIERVO_CLAVO   = 4.0    # cuanto se prolongan las pezunas hacia el suelo del pozo
+CIERVO_SUELA   = 1.0    # ultimo tramo de cada pata que se prolonga (mm)
                         # (se recortan a media pared del tubo: no asoman a la caja)
 
 TAPA_ESP      = 3.0     # espesor de la tapa (superpuesta a la trasera)
 TAPA_VUELO    = 5.0     # cuanto sobresale la tapa del hueco
 TAPA_ENCASTRE = 2.0     # espigo de la tapa que centra la pieza de luz
 TAPA_ESPIGO_W = 2.0
+CAJA_MIN      = 1.5     # la caja del LED no tiene zonas mas estrechas que esto (mm):
+                        # donde tubo y falda quedarian casi pegados, se macizan
+ANCHO_MIN     = 1.2     # espigo y agujero del pedestal: nada mas estrecho que esto
 
 TORNILLO_D    = 2.7     # taladro para M3 autorroscante
 TORNILLO_H    = 8.0
@@ -85,6 +102,59 @@ def log(*a):
     print(*a, flush=True)
 
 
+def sin_dientes(poly, nombre=''):
+    """Quita los dientes que deja enderezar un contorno, sin perder esquinas:
+    1. zigzags: vertices cuyo triangulo con sus vecinos mide < DIENTE_AREA;
+    2. lados cortos (< ESQUINA_LADO) entre dos largos (puntas, esquinas mordidas): sus dos
+       extremos se cambian por el cruce de los lados vecinos, si ese cruce esta
+       cerca (< ESQUINA_MAX) y el triangulo que se gana o pierde es < ESQUINA_AREA.
+       Los escalones de verdad no cambian: sus lados vecinos se cruzan lejos."""
+    c = [np.array(x) for x in np.array(poly.exterior.coords)[:-1]]
+    hechos = []
+
+    def tri(a, b, d):
+        return 0.5 * abs((b[0] - a[0]) * (d[1] - a[1]) - (d[0] - a[0]) * (b[1] - a[1]))
+
+    cambio = True
+    while cambio and len(c) > 4:
+        cambio = False
+        n = len(c)
+        areas = [tri(c[i - 1], c[i], c[(i + 1) % n]) for i in range(n)]
+        i = int(np.argmin(areas))
+        if areas[i] < DIENTE_AREA:
+            hechos.append(('zigzag', np.round(c[i], 1).tolist(), round(areas[i], 2)))
+            c.pop(i)
+            cambio = True
+            continue
+        # lados cortos, del mas corto al mas largo
+        lados = sorted(range(n), key=lambda k: np.linalg.norm(c[(k + 1) % n] - c[k]))
+        for k in lados:
+            if np.linalg.norm(c[(k + 1) % n] - c[k]) >= ESQUINA_LADO:
+                break
+            a0, a1 = c[k - 1], c[k]                 # lado anterior
+            b0, b1 = c[(k + 1) % n], c[(k + 2) % n]  # lado siguiente
+            d1, d2 = a1 - a0, b1 - b0
+            den = d1[0] * d2[1] - d1[1] * d2[0]
+            if abs(den) < 1e-9:
+                continue
+            t = ((b0[0] - a0[0]) * d2[1] - (b0[1] - a0[1]) * d2[0]) / den
+            x = a0 + t * d1
+            medio = (a1 + b0) / 2
+            if np.linalg.norm(x - medio) > ESQUINA_MAX or tri(a1, b0, x) > ESQUINA_AREA:
+                continue
+            hechos.append(('esquina', np.round(a1, 1).tolist(), np.round(b0, 1).tolist(),
+                           '->', np.round(x, 1).tolist()))
+            c[k] = x
+            c.pop((k + 1) % n)
+            cambio = True
+            break
+    out = Polygon(c)
+    assert out.is_valid, f'{nombre}: el contorno sin dientes no es valido'
+    for h in hechos:
+        log(f'  {nombre}: {h}')
+    return out
+
+
 def secciones_xy(mesh, z, min_area=1.0):
     s = mesh.section(plane_origin=[0, 0, z], plane_normal=[0, 0, 1])
     if s is None:
@@ -105,6 +175,13 @@ def mayor(poly):
 
 def off(poly, d):
     return mayor(poly.buffer(d, join_style=JS, mitre_limit=8))
+
+
+def abrir(poly, ancho):
+    """Quita las partes de un poligono mas estrechas que `ancho` (apertura). Los
+    extremos que quedan son redondos: sin puntas finas."""
+    return poly.buffer(-ancho / 2, join_style=JS, mitre_limit=8).buffer(
+        ancho / 2, join_style=1).intersection(poly)
 
 
 def prisma(poly, z0, z1):
@@ -167,58 +244,71 @@ def degenerados(mesh):
     return (ls.min(1) < 1e-6) | (h < 1e-4)
 
 
-def sanear(mesh, corta=1e-3, max_iter=30):
+def sanear(mesh, corta=0.01, max_iter=40):
     """Elimina los triangulos degenerados que deja simplify sin mover la superficie:
-    - aguja (el tercer vertice cae sobre la arista larga): se voltea esa arista;
-    - casquete (una arista de menos de `corta`): se colapsa esa arista, solo si
-      no pellizca la malla (los dos extremos solo comparten los 2 vecinos
-      opuestos: condicion de enlace)."""
+    - con un lado de menos de `corta`: se colapsa ese lado, solo si no pellizca
+      la malla (los dos extremos solo comparten los 2 vecinos opuestos:
+      condicion de enlace). La superficie se mueve menos de `corta`;
+    - aguja (el tercer vertice cae sobre el lado largo), o si el colapso no se
+      puede: se voltea el lado largo. La superficie se mueve menos que la
+      altura de la aguja (< 0,1 micras)."""
     V = np.asarray(mesh.vertices, float).copy()
     F = np.asarray(mesh.faces).copy()
     for _ in range(max_iter):
         t = V[F]
-        ls = np.linalg.norm(t[:, [1, 2, 0]] - t, axis=2)      # arista k: F[k] -> F[k+1]
+        ls = np.linalg.norm(t[:, [1, 2, 0]] - t, axis=2)      # lado k: F[k] -> F[k+1]
         area = 0.5 * np.linalg.norm(np.cross(t[:, 1] - t[:, 0], t[:, 2] - t[:, 0]), axis=1)
         h = 2 * area / np.maximum(ls.max(1), 1e-12)
         malas = np.where((h < 1e-4) | (ls.min(1) < 1e-6))[0]
         if not len(malas):
             break
         e = np.stack([F, np.roll(F, -1, axis=1)], axis=2).reshape(-1, 2)
-        cara = np.repeat(np.arange(len(F)), 3)
-        mapa = dict(zip(map(tuple, e), cara))
+        mapa = dict(zip(map(tuple, e), np.repeat(np.arange(len(F)), 3)))
         vecinos = {}
         for a, b in e:
-            vecinos.setdefault(a, set()).add(b); vecinos.setdefault(b, set()).add(a)
+            vecinos.setdefault(a, set()).add(b)
+            vecinos.setdefault(b, set()).add(a)
         tocadas, borrar, hechos = set(), set(), 0
+
+        def colapsar(f):
+            k = int(np.argmin(ls[f]))
+            a, b = F[f][k], F[f][(k + 1) % 3]
+            g = mapa.get((b, a))
+            if g is None or g in tocadas:
+                return False
+            opuestos = {F[f][(k + 2) % 3]} | {v for v in F[g] if v != a and v != b}
+            if (vecinos[a] & vecinos[b]) != opuestos:
+                return False
+            caras_b = set(np.where((F == b).any(1))[0].tolist())
+            if tocadas & caras_b:
+                return False
+            F[F == b] = a
+            borrar.update((f, g))
+            tocadas.update(caras_b | {f, g})
+            return True
+
+        def voltear(f):
+            k = int(np.argmax(ls[f]))
+            a, b, c = F[f][k], F[f][(k + 1) % 3], F[f][(k + 2) % 3]
+            g = mapa.get((b, a))
+            if g is None or g in tocadas:
+                return False
+            d = [v for v in F[g] if v != a and v != b][0]
+            if c == d or d in vecinos[c]:
+                return False
+            F[f] = (a, d, c)
+            F[g] = (d, b, c)
+            tocadas.update((f, g))
+            return True
+
         for f in malas:
             if f in tocadas:
                 continue
-            if ls[f].min() < corta:                       # casquete: colapsar la arista corta
-                k = int(np.argmin(ls[f]))
-                a, b = F[f][k], F[f][(k + 1) % 3]
-                g = mapa.get((b, a))
-                if g is None or g in tocadas:
-                    continue
-                opuestos = {F[f][(k + 2) % 3]} | {v for v in F[g] if v != a and v != b}
-                if (vecinos[a] & vecinos[b]) != opuestos:
-                    continue
-                caras_b = np.where((F == b).any(1))[0]
-                if tocadas & set(caras_b.tolist()):
-                    continue
-                F[F == b] = a
-                borrar.update((f, g)); tocadas.update(caras_b.tolist()); tocadas.update((f, g))
-                hechos += 1
-            else:                                          # aguja: voltear la arista larga
-                k = int(np.argmax(ls[f]))
-                a, b, c = F[f][k], F[f][(k + 1) % 3], F[f][(k + 2) % 3]
-                g = mapa.get((b, a))
-                if g is None or g in tocadas:
-                    continue
-                d = [v for v in F[g] if v != a and v != b][0]
-                if c == d or d in vecinos[c]:
-                    continue
-                F[f] = (a, d, c); F[g] = (d, b, c)
-                tocadas.update((f, g)); hechos += 1
+            if ls[f].min() < corta:
+                ok = colapsar(f) or voltear(f)
+            else:
+                ok = voltear(f) or colapsar(f)
+            hechos += ok
         if borrar:
             F = np.delete(F, sorted(borrar), axis=0)
         if not hechos:
@@ -325,7 +415,7 @@ def anillo_pozo(z):
 # un pocillo hasta el fondo que el original no tiene.
 _env = mayor(unary_union([anillo_pozo(z) for z in
                           np.linspace(Z_SUELO + 0.3, Z_JUNTA - 0.5, 22)])).buffer(0)
-POZO = mayor(_env.simplify(TOL_POZO))
+POZO = sin_dientes(mayor(_env.simplify(TOL_POZO)), 'POZO')
 log(f'  POZO: {len(_env.exterior.coords)} vertices -> {len(POZO.exterior.coords)-1} '
     f'lados rectos, desviacion max {_env.hausdorff_distance(POZO):.2f} mm, '
     f'area {POZO.area:.0f} mm2')
@@ -382,19 +472,23 @@ def mascara_a_poligono(mask, geo, cierre=3):
     return mayor(out)
 
 
-# CORONA: la pared iluminada. Se reconoce por su altura y se endereza hacia
-# DENTRO, para no comerse nunca el escalon del marco.
+# CORONA: la pared iluminada. Se reconoce por su altura y se endereza.
 D, GEO = mapa_frontal()
 _reg = mascara_a_poligono((D > Z_CORONA - 3.5) & (D < Z_CORONA + 1.2), GEO)
 _ext = Polygon(_reg.exterior)
-# se mete TOL hacia dentro antes de enderezar, asi el contorno recto nunca se
-# sale del escalon original
-AEX = mayor(_ext.buffer(-TOL_CORONA, join_style=1).simplify(TOL_CORONA))
+if CORONA_BORDE == 'dentro':
+    # se mete TOL hacia dentro antes de enderezar: el contorno recto nunca se
+    # sale del escalon original, pero deja una tira de piedra antes de el
+    AEX = mayor(_ext.buffer(-TOL_CORONA, join_style=1).simplify(TOL_CORONA))
+else:
+    # se saca TOL_FUERA hacia fuera antes de enderezar: el contorno recto cubre
+    # toda la zona plana y llega a la pared del escalon (entra 0-2*TOL_FUERA)
+    AEX = mayor(_ext.buffer(TOL_FUERA, join_style=1).simplify(TOL_FUERA))
 _min = off(POZO, PARED + HOLGURA + FALDA + 0.3)   # minimo para que quepa la falda
 _fuera = _min.difference(_ext)
 log(f'  (la falda pide {_fuera.area:.0f} mm2 por fuera del escalon del marco, '
     f'hasta {_ext.exterior.hausdorff_distance(_min.exterior) if not _fuera.is_empty else 0:.1f} mm)')
-AEX = mayor(mayor(AEX.union(_min)).simplify(0.3))
+AEX = sin_dientes(mayor(mayor(AEX.union(_min)).simplify(0.3)), 'AEX')
 CORONA = mayor(AEX.difference(POZO))
 log(f'  CORONA: {len(_ext.exterior.coords)} vertices -> '
     f'{len(AEX.exterior.coords)-1} lados rectos, area {CORONA.area:.0f} mm2, '
@@ -436,19 +530,23 @@ CIERVO_REL = trimesh.Trimesh(CIERVO_REL.vertices, CIERVO_REL.faces)
 _base = xy_material(CIERVO_REL, Z_SUELO + 0.01).intersection(
     xy_material(CIERVO_REL, Z_SUELO + 0.3))
 BOCA_CIERVO = _base.buffer(-CIERVO_BOCA, join_style=1)
-# las pezunas quedan a 0,5-1 mm del suelo del pozo: se prolonga su planta hacia
-# abajo en linea recta y se recorta a media pared del tubo, para soldar el
-# relieve sin asomar a la caja del LED. (Antes se copiaba el pie desplazado 4 mm
-# y en las patas inclinadas dejaba munones a la vista.)
+# las pezunas quedan a 0,5-1 mm del suelo del pozo. Cada pata se prolonga
+# hasta el suelo con su propia forma: envolvente convexa de su ultimo milimetro
+# y de ese mismo trozo bajado hasta media pared del tubo. Asi no queda rendija
+# bajo las patas ni munones (antes: copia del pie desplazada 4 mm). Se recorta
+# a media pared del tubo para no asomar a la caja del LED.
 _ym = CIERVO_REL.bounds[0][1]
-_rx = trimesh.transformations.rotation_matrix(np.pi / 2, [1, 0, 0])   # Y -> Z
-_c = CIERVO_REL.copy()
-_c.apply_transform(_rx)
-_planta = xy_material(_c, _ym + 0.3).intersection(xy_material(_c, _ym + 0.8))
-_pies = prisma_multi(_planta.buffer(-0.05, join_style=1), _ym - CIERVO_CLAVO, _ym + 0.8)
-_pies.apply_transform(np.linalg.inv(_rx))
-_pies = bo('intersection', [_pies, prisma(off(POZO, PARED / 2),
-                                          Z_SUELO - 1, Z_SUELO + CIERVO_RELIEVE + 1)])
+_suela = bo('intersection', [CIERVO_REL, prisma(sbox(-500, _ym - 1, 500, _ym + CIERVO_SUELA),
+                                                 Z_SUELO - 1, Z_SUELO + CIERVO_RELIEVE + 1)])
+_pies = []
+for _p in _suela.split(only_watertight=False):
+    if _p.volume < 0.05:
+        continue
+    _pies.append(trimesh.convex.convex_hull(np.vstack([_p.vertices,
+                                                       _p.vertices - [0, CIERVO_CLAVO, 0]])))
+_pies = bo('intersection', [bo('union', _pies) if len(_pies) > 1 else _pies[0],
+                            prisma(off(POZO, PARED / 2), Z_SUELO - 1, Z_SUELO + CIERVO_RELIEVE + 1)])
+log(f'  {len(_pies.split(only_watertight=False))} pies prolongados hasta el suelo')
 CIERVO_REL = bo('union', [CIERVO_REL, _pies])
 SIL_REL = trimesh.path.polygons.projected(
     CIERVO_REL, normal=[0, 0, 1], precise=True).buffer(0).simplify(0.05)
@@ -512,15 +610,21 @@ PIEDRA = pulir(PIEDRA, 'piedra')
 # 6. LUZ: corona + escalon interno + falda + ciervo, todo de una pieza
 # ----------------------------------------------------------------------------
 log('pieza de luz...')
+# caja del LED: el hueco entre tubo y falda, sin zonas estrechas. Donde los dos
+# quedarian casi pegados (rendija de menos de CAJA_MIN) se maciza: tubo y falda
+# salen de un solo prisma sin ranuras.
+CAJA = abrir(AEX.buffer(-FALDA, join_style=JS, mitre_limit=8)
+             .difference(off(POZO, OFF_LUZ)), CAJA_MIN)
 LUZ = bo('union', [
     prisma_multi(CORONA, Z_JUNTA, Z_CORONA),                                # corona
-    prisma_multi(off(POZO, OFF_LUZ).difference(POZO), Z_TRASERA, Z_JUNTA),  # tubo
-    prisma_multi(AEX.difference(AEX.buffer(-FALDA, join_style=JS, mitre_limit=8)),
-                 Z_TRASERA, Z_JUNTA),                                       # falda
+    bo('difference', [prisma_multi(AEX.difference(POZO), Z_TRASERA, Z_JUNTA),  # tubo + falda
+                      prisma_multi(CAJA, Z_TRASERA - 1, Z_JUNTA)]),
     CIERVO_REL,
 ])
 # hueco del ciervo: erosion 3D; la boca trasera lo une con el agujero del pedestal
-HUECO_CIERVO = erosionar(CIERVO_REL, CIERVO_PARED)
+HUECO_CIERVO = bo('intersection', [
+    erosionar(CIERVO_REL, CIERVO_PARED),
+    prisma_multi(abrir(SIL_REL, CIERVO_HUECO_MIN), Z_SUELO - 2, Z_SUELO + CIERVO_RELIEVE + 2)])
 LUZ = limpiar(bo('difference', [LUZ, HUECO_CIERVO,
                                 prisma_multi(BOCA_CIERVO, Z_SUELO - 1, Z_SUELO + 3.0)]))
 log(f'  hueco del ciervo {HUECO_CIERVO.volume:.0f} mm3, boca trasera {BOCA_CIERVO.area:.0f} mm2')
@@ -535,7 +639,8 @@ LUZ = pulir(LUZ, 'luz', tol=0.01)
 log('tapa...')
 _e0 = AEX.buffer(-FALDA - HOLGURA, join_style=JS, mitre_limit=8)
 espigo = _e0.difference(_e0.buffer(-TAPA_ESPIGO_W, join_style=JS, mitre_limit=8))
-espigo = espigo.difference(off(POZO, OFF_PIEDRA))
+espigo = abrir(espigo.intersection(CAJA.buffer(-HOLGURA, join_style=JS, mitre_limit=8)),
+               ANCHO_MIN)
 TAPA = bo('union', [
     prisma_multi(P_TAPA, Z_TRASERA - TAPA_ESP, Z_TRASERA),
     prisma_multi(espigo, Z_TRASERA - 0.01, Z_TRASERA + TAPA_ENCASTRE),
@@ -543,7 +648,8 @@ TAPA = bo('union', [
 PEDESTAL = bo('difference', [
     prisma_multi(POZO.buffer(-HOLGURA, join_style=JS, mitre_limit=8),
                  Z_TRASERA, Z_SUELO),
-    prisma_multi(mayor(SIL_REL.buffer(-2.5, join_style=1)), Z_TRASERA - 1, Z_SUELO + 1)])
+    prisma_multi(abrir(mayor(SIL_REL.buffer(-2.5, join_style=1)), ANCHO_MIN),
+                 Z_TRASERA - 1, Z_SUELO + 1)])
 TAPA = bo('union', [TAPA, PEDESTAL])
 log(f'  + fondo del nicho: {PEDESTAL.volume/1000:.1f} cm3, '
     f'{Z_SUELO - Z_TRASERA:.1f} mm de grueso')
@@ -567,7 +673,7 @@ for x, y in TORNILLOS:
 TAPA = limpiar(bo('difference', [TAPA] + PASOS))
 TAPA = pulir(TAPA, 'tapa')
 log(f'  hueco para el LED dentro de la pieza translucida: '
-    f'{(AEX.area - POZO.area) / 100:.0f} cm2 de planta, '
+    f'{CAJA.area / 100:.0f} cm2 de planta, '
     f'{Z_JUNTA - Z_TRASERA:.0f} mm de fondo')
 
 

@@ -131,14 +131,33 @@ Hecho:
   aceptado, recorrido fino, e islas en el aire (la de antes no las veía).
 
 - Malla perfecta: `sanear()` en `pulir()` quita los triángulos degenerados
-  (voltea agujas, colapsa aristas < 0,001 mm con condición de enlace) y
-  `pulir()` exige 0. `verificar.py` comprueba también los .stl: 0 degenerados.
-- `render.py` con z-buffer: el algoritmo del pintor sacaba esquirlas en las
-  paredes del pozo que no existían en el modelo (Sergi las marcó el 24-09).
+  (colapsa lados < 0,01 mm con condición de enlace, voltea agujas) y exige 0.
+  `verificar.py` comprueba también los .stl.
+- `render.py` con z-buffer: el algoritmo del pintor sacaba esquirlas falsas.
+- Anomalías que Sergi vio en el laminador (24-09), arregladas:
+  - Picos en esquinas del pozo y del borde de la corona (dientes que deja
+    `simplify`): `sin_dientes()` quita zigzags y rehace esquinas mordidas.
+  - Rendija de 0,4 mm entre tubo y falda en toda la altura: la caja del LED es
+    ahora el hueco sin zonas de menos de 1,5 mm; lo demás se maciza (caja: 17
+    cm² útiles; las rendijas no servían para el LED).
+  - Espigo y agujero del pedestal sin partes de menos de 1,2 mm.
+  - Hueco del ciervo solo donde la silueta pasa de 8 mm: en patas y cuernas
+    dejaba láminas de vacío que se verían al trasluz.
+  - Pezuñas: cada una baja al suelo con su forma (envolvente convexa de su
+    último mm); antes quedaba una rendija de 0,4–0,6 mm bajo las patas.
+- `CORONA_BORDE`: probado 'fuera' (la corona hasta la pared del escalón) y
+  descartado: el corte recto cruza en rasante la pared texturada y deja costura
+  en sierra. Se queda 'dentro'.
+- `verificar.py`: contornos sin dientes y barrido de lengüetas/rendijas < 0,8 mm
+  en lo construido (tapa entera, luz fuera del ciervo). **49/50**.
 
-`verificar.py`: **45/46**. Único fallo: paredes del pozo, 25 de 599 puntos a más
-de 1,2 mm del original (mediana 0,07, máx. 1,74 mm), por enderezarlas en 15
-lados rectos. Se reduce con `TOL_POZO` más pequeño (más lados).
+Único fallo: paredes del pozo, 17 de 573 puntos a más de 1,2 mm del original
+(mediana 0,06, máx. 1,65 mm), por enderezarlas en 10 lados rectos.
+
+Pendiente de decisión de Sergi — defectos que trae el OBJ de Meshy
+(`defectos_meshy.png`): nervaduras y cantos dentados en las paredes de los
+escalones del marco, y una pata delantera modelada como una tabla plana.
+Arreglarlos es retocar la superficie de Meshy.
 
 ## Cómo trabaja Sergi (importante)
 
