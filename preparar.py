@@ -24,16 +24,21 @@ cavidades abriendo hacia arriba -> sin soportes.
 import os
 import numpy as np
 import trimesh
+import manifold3d
 from shapely.geometry import Polygon, LineString, Point, box as sbox
 from shapely.ops import unary_union, polygonize
 
 # ----------------------------------------------------------------------------
 # PARAMETROS
 # ----------------------------------------------------------------------------
-OBJ = (r'C:/Users/sergi/Downloads/Meshy_AI_Starlit_Stag_0923134854_generate_obj'
-       r'/Meshy_AI_Starlit_Stag_0923134854_generate_obj'
-       r'/Meshy_AI_Starlit_Stag_0923134854_generate.obj')
 OUT = os.path.dirname(os.path.abspath(__file__))
+# el OBJ de Meshy: una copia en esta carpeta como meshy.obj, o donde se descargo
+OBJ = next((p for p in (
+    os.path.join(OUT, 'meshy.obj'),
+    r'C:/Users/sergi/Downloads/Meshy_AI_Starlit_Stag_0923134854_generate_obj'
+    r'/Meshy_AI_Starlit_Stag_0923134854_generate_obj'
+    r'/Meshy_AI_Starlit_Stag_0923134854_generate.obj') if os.path.exists(p)),
+    os.path.join(OUT, 'meshy.obj'))
 
 ANCHO_MM      = 200.0   # ancho final de la estrella (manda la escala)
 APLANAR       = 0.5     # mm de textura que se quitan a la trasera para dejarla plana
@@ -48,7 +53,8 @@ ESP_CORONA    = 3.5     # espesor de la placa de la corona
 
 CIERVO_RELIEVE = 15.0   # cuanto sobresale el ciervo de la pared del fondo
 CIERVO_PARED   = 2.2    # pared del ciervo (erosion 3D real)
-CIERVO_CLAVO   = 4.0    # cuanto se hunden las pezunas en el suelo del pozo
+CIERVO_CLAVO   = 4.0    # cuanto se alargan las pezunas hacia el suelo del pozo
+                        # (se recortan a media pared del tubo: no asoman a la caja)
 
 TAPA_ESP      = 3.0     # espesor de la tapa (superpuesta a la trasera)
 TAPA_VUELO    = 5.0     # cuanto sobresale la tapa del hueco
@@ -58,7 +64,7 @@ TAPA_ESPIGO_W = 2.0
 TORNILLO_D    = 2.7     # taladro para M3 autorroscante
 TORNILLO_H    = 8.0
 TORNILLO_R    = 4.5     # distancia del borde del hueco
-TORNILLO_CAB  = 6.2
+TORNILLO_CAB  = 6.2     # avellanado de 90 grados, abierto hacia la cara de fuera
 N_TORNILLOS   = 5
 
 CABLE_ANCHO   = 6.0     # canal del cable en la trasera
@@ -67,6 +73,7 @@ CABLE_PROF    = 3.0
 
 ENGINE = 'manifold'
 JS = 2  # mitre
+TOL_PULIDO = 1e-3       # cuanto puede moverse una superficie al pulir (mm)
 
 
 # ----------------------------------------------------------------------------
@@ -144,20 +151,49 @@ def limpiar(mesh, aviso=50.0):
     return cs[0]
 
 
-def pulir(mesh, nombre=''):
-    """Limpieza conservadora: fusiona vertices duplicados y caras repetidas.
-    Si al hacerlo la malla dejase de estar cerrada, se queda como estaba."""
-    m = trimesh.Trimesh(mesh.vertices.copy(), mesh.faces.copy(), process=False)
-    antes = len(m.faces)
-    m.merge_vertices()
-    m.update_faces(m.unique_faces())
-    m.remove_unreferenced_vertices()
-    m.fix_normals()
-    if not (m.is_watertight and m.is_winding_consistent):
-        log(f'    pulido {nombre}: la limpieza abria la malla, se deja como estaba')
-        return mesh
-    log(f'    pulido {nombre}: {antes} -> {len(m.faces)} caras, '
-        f'{(m.area_faces < 1e-4).sum()} astillas, cerrada={m.is_watertight}')
+def degenerados(mesh):
+    """Triangulos sin forma: con una arista nula o tan aplastados (aguja) que su
+    altura no llega a 0,1 micras. Los triangulos pequenos pero bien formados no
+    cuentan: no son un defecto."""
+    t = mesh.triangles
+    ls = np.linalg.norm(t[:, [1, 2, 0]] - t, axis=2)
+    h = 2 * mesh.area_faces / np.maximum(ls.max(1), 1e-12)
+    return (ls.min(1) < 1e-6) | (h < 1e-4)
+
+
+def pulir(mesh, nombre='', tol=TOL_PULIDO):
+    """Quita las astillas de las booleanas sin abrir la malla.
+
+    1. Antes de tocar nada exige que la malla que sale de la booleana siga
+       cerrada al fusionar los vertices que coinciden. Si no, dos solidos se
+       tocan en una arista o un punto (un pellizco, un filo de espesor cero).
+       Eso no es suciedad de la malla sino un fallo de diseno, y como en
+       limpiar() se para el script en vez de disimularlo.
+    2. Colapsa aristas cortas y triangulos astilla DENTRO de manifold, que por
+       construccion no puede dejar la malla abierta, sin mover ninguna
+       superficie mas de `tol`."""
+    f = trimesh.Trimesh(mesh.vertices.copy(), mesh.faces.copy(), process=False)
+    f.merge_vertices()
+    if not f.is_watertight:
+        _, inv, cnt = np.unique(mesh.vertices, axis=0, return_inverse=True,
+                                return_counts=True)
+        dup = mesh.vertices[cnt[inv] > 1]
+        raise AssertionError(
+            f'{nombre}: {len(dup)} vertices en contacto sin espesor en '
+            f'Z {np.unique(np.round(dup[:, 2], 2))[:6].tolist()}, '
+            f'XY ~{np.round(dup[:, :2].mean(0), 1).tolist()}: hay dos solidos '
+            f'que se tocan en una arista o un punto')
+    M = manifold3d.Manifold(manifold3d.Mesh(
+        vert_properties=np.asarray(mesh.vertices, np.float32),
+        tri_verts=np.asarray(mesh.faces, np.uint32)))
+    g = M.simplify(tol).to_mesh()
+    m = trimesh.Trimesh(g.vert_properties[:, :3], g.tri_verts, process=False)
+    assert m.is_watertight and m.is_winding_consistent, f'{nombre}: el pulido abrio la malla'
+    log(f'    pulido {nombre}: {len(mesh.faces)} -> {len(m.faces)} caras, '
+        f'astillas <0,001 mm2 {(mesh.area_faces < 1e-3).sum()} -> '
+        f'{(m.area_faces < 1e-3).sum()}, degenerados {degenerados(mesh).sum()} -> '
+        f'{degenerados(m).sum()}, volumen {abs(m.volume - mesh.volume):.2f} mm3 '
+        f'de diferencia')
     return m
 
 
@@ -324,6 +360,9 @@ _ym = CIERVO_REL.bounds[0][1]
 _pies = bo('intersection', [_pies, prisma(
     sbox(-500, _ym - CIERVO_CLAVO - 1, 500, _ym + 8),
     Z_SUELO - 1, Z_SUELO + CIERVO_RELIEVE + 1)])
+# se recortan a media pared del tubo: se sueldan a el sin asomar a la caja del LED
+_pies = bo('intersection', [_pies, prisma(off(POZO, PARED / 2),
+                                          Z_SUELO - 1, Z_SUELO + CIERVO_RELIEVE + 1)])
 CIERVO_REL = bo('union', [CIERVO_REL, _pies])
 SIL_REL = trimesh.path.polygons.projected(
     CIERVO_REL, normal=[0, 0, 1], precise=True).buffer(0).simplify(0.05)
@@ -424,15 +463,18 @@ muesca = prisma(sbox(-CABLE_ANCHO / 2 - HOLGURA, P_TAPA.bounds[1] - 5,
                      CABLE_ANCHO / 2 + HOLGURA, y_alto + 2),
                 Z_TRASERA - 0.01, Z_TRASERA + TAPA_ENCASTRE + 0.01)
 TAPA = bo('difference', [TAPA, muesca])
+# paso del tornillo + avellanado de 90 grados que abre hacia la cara de FUERA
+# (la cabeza queda enrasada), en un solo solido de revolucion: sin booleana
+# entre cono y cilindro, que se tocaban en un circulo y pellizcaban la malla
+_zb = Z_TRASERA - TAPA_ESP
+_rp, _rc = TORNILLO_D / 2 + 0.45, TORNILLO_CAB / 2
+PERFIL_PASO = [(0, _zb - 1), (_rc + 1, _zb - 1), (_rc, _zb), (_rp, _zb + _rc - _rp),
+               (_rp, Z_TRASERA + 1), (0, Z_TRASERA + 1)]
 PASOS = []
 for x, y in TORNILLOS:
-    c = trimesh.creation.cylinder(radius=TORNILLO_D / 2 + 0.45, height=TAPA_ESP + 4)
-    c.apply_translation([x, y, Z_TRASERA - TAPA_ESP + (TAPA_ESP + 4) / 2 - 2])
+    c = trimesh.creation.revolve(PERFIL_PASO, sections=48)
+    c.apply_translation([x, y, 0])
     PASOS.append(c)
-    k = trimesh.creation.cone(radius=TORNILLO_CAB / 2, height=TORNILLO_CAB / 2)
-    k.apply_transform(trimesh.transformations.rotation_matrix(np.pi, [1, 0, 0]))
-    k.apply_translation([x, y, Z_TRASERA - TAPA_ESP + TORNILLO_CAB / 2])
-    PASOS.append(k)
 TAPA = limpiar(bo('difference', [TAPA] + PASOS))
 TAPA = pulir(TAPA, 'tapa')
 log(f'  hueco para el LED dentro de la pieza translucida: '

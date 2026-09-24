@@ -103,6 +103,42 @@ tapa:   la limpieza abria la malla, se deja como estaba             137.5 cm3
    `render.py` (rasterizador propio) y compara con la versión anterior.
 5. Actualizar el `README.md` con las cotas nuevas cuando esté cerrado.
 
+## Sesión del 24-09 (nube): qué se hizo y qué queda
+
+**Las piezas .stl/.ply de la carpeta NO están regeneradas**: el OBJ no se subió
+al repo y `preparar.py` no se ha podido ejecutar aquí. Hay que subirlo como
+`meshy.obj` en esta carpeta (preparar y verificar lo buscan ahí primero).
+
+Hecho:
+- `verificar.py` adaptado a las cotas y contornos nuevos, con comprobaciones
+  nuevas: malla limpia (pellizcos, contactos entre láminas, triángulos
+  degenerados), la regla de la luz pared a pared, la falda contra el marco y el
+  recorrido de montaje con pasos de 0,1 / 0,25 / 0,5 mm además de los de antes.
+  Sobre las piezas actuales: 30/38, sección 4 sin ejecutar (falta el OBJ).
+- `pulir()` reescrito: primero exige que la malla de la booleana no tenga
+  pellizcos (si los tiene, para y dice dónde: es diseño), luego colapsa astillas
+  con `Manifold.simplify(0,001 mm)`, que no puede abrir la malla.
+- Causa de que la tapa no se pudiera limpiar: el avellanado estaba AL REVÉS
+  (Ø3,6 por fuera, Ø5,9 contra la piedra) y su cono tocaba el taladro en un
+  círculo exacto. Ahora es un solo sólido de revolución que abre hacia fuera.
+  Probado sobre la tapa: 0 pellizcos, 0 degenerados, 0 astillas tras pulir.
+- Las pezuñas atravesaban el tubo y asomaban 1–3 mm² dentro de la caja del LED:
+  ahora se recortan a media pared del tubo.
+
+Pendiente (todo necesita el OBJ):
+1. Luz, pellizco en Z_SUELO+0,2: la tapa del prisma `MACIZO`
+   (`SIL_REL.buffer(-2)`, hasta Z_SUELO+0,2) roza la piel del relieve. Rehacer el
+   vaciado prolongando hacia atrás la sección real de la base del relieve.
+2. Luz, vacío de espesor cero en (0,8, −38,5, −2,4): donde la pata mide < 4,4 mm
+   la erosión de 2,2 deja una lámina. Hacer apertura (erosionar 2,4 y dilatar 0,2).
+3. Luz, muñones fantasma: la copia de pezuñas desplazada 4 mm en −Y se ve junto
+   a las patas inclinadas. Mejor extruir la planta de las pezuñas en −Y.
+4. Piedra: 9 agujas en el canto de la trasera (Z=−26,41): imantar al plano los
+   vértices del OBJ a menos de 0,02 mm antes de cortar.
+5. **Falda contra el marco (decisión de Sergi)**: el rebaje corta marco visible en
+   88 mm de contorno, hasta 17,3 mm de alto, 1 881 mm² (abajo, bajo las pezuñas, y
+   en la esquina de la roca). Ver `falda_marco.png` y `falda_zoom.png`.
+
 ## Cómo trabaja Sergi (importante)
 
 - La parte estética la lleva él y te la marca sobre fotos y renders. Tu papel es

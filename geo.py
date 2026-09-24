@@ -29,3 +29,19 @@ def xy_material(mesh, z, min_area=0.02):
         return Polygon()
     m = [T[0, 0], T[0, 1], T[1, 0], T[1, 1], T[0, 3], T[1, 3]]
     return unary_union([affine_transform(q, m) for q in polys])
+
+
+def contactos(mesh, r=0.01):
+    """Vertices a menos de r que no son vecinos ni vecinos de vecinos: dos
+    laminas de la malla que se tocan (pellizco o filo de espesor cero)."""
+    from scipy.spatial import cKDTree
+    from scipy import sparse
+    pr = cKDTree(mesh.vertices).query_pairs(r, output_type='ndarray')
+    if not len(pr):
+        return pr
+    e = mesh.edges_unique
+    n = len(mesh.vertices)
+    A = sparse.coo_matrix((np.ones(len(e)), (e[:, 0], e[:, 1])), shape=(n, n)).tocsr()
+    A = A + A.T + sparse.identity(n, format='csr')
+    A2 = (A @ A).tocsr()
+    return pr[np.asarray(A2[pr[:, 0], pr[:, 1]]).ravel() == 0]
